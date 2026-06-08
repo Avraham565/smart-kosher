@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smart-kosher"
+version = "0.1.0"
+description = "Offline Jewish-calendar home automation core"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["smart_kosher*"]
+
+[tool.setuptools.package-data]
+smart_kosher = ["data/*.json"]

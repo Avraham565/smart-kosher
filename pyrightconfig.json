@@ -1,0 +1,8 @@
+{
+  "pythonVersion": "3.14",
+  "extraPaths": [
+    "src"
+  ],
+  "reportMissingModuleSource": "none",
+  "reportPrivateImportUsage": "none"
+}

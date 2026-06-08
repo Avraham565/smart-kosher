@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:he.aliexpress.com)",
+      "WebSearch",
+      "WebFetch(domain:systems-il.com)",
+      "WebFetch(domain:www.socketstore.co.il)"
+    ]
+  }
+}
