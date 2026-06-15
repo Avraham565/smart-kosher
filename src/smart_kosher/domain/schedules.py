@@ -17,6 +17,7 @@ ZMAN_KEYS = {
 
 RECURRENCE_TYPES = {
     "daily", "days_of_week", "assur_bemelacha", "erev_assur_bemelacha",
+    "motzei_assur_bemelacha",
     "chol_hamoed", "rosh_chodesh", "hebrew_day_of_month", "hebrew_date",
     "gregorian_date", "one_time",
 }

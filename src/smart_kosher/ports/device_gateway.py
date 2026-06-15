@@ -3,5 +3,5 @@
 
 class DeviceGateway:
     def send(self, event):
-        """Return a result dict whose status is ack, timeout, or error."""
+        """Return dict: {status: ack|timeout|error, event_id}"""
         raise NotImplementedError

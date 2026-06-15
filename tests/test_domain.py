@@ -14,12 +14,12 @@ from smart_kosher.domain.schedules import Schedule, validate_schedule
 
 
 class DomainTests(unittest.TestCase):
-    def test_actions_validate_dimming_range(self):
-        self.assertEqual(50, Action("dim", {"level": 50}).to_dict()["action_data"]["level"])
-        with self.assertRaises(ValueError):
-            validate_action("dim", {"level": 101})
-        with self.assertRaises(ValueError):
-            validate_action("unsupported", {})
+    def test_actions_accept_only_supported_types(self):
+        for action_type in ("on", "off", "toggle"):
+            self.assertTrue(validate_action(action_type))
+        for action_type in ("dim", "set_level", "unsupported"):
+            with self.assertRaises(ValueError):
+                validate_action(action_type, {})
 
     def test_device_schemas(self):
         self.assertTrue(validate_zone({"id": "kitchen", "name": "Kitchen"}))

@@ -426,13 +426,6 @@ def is_yom_tov(sig_day):
                                 'tzom_gedalyah', 'tenth_of_teves', 'taanis_esther'))
 
 
-def is_erev_yom_tov(sig_day, j_month, j_day):
-    if sig_day is None:
-        return False
-    return (sig_day.startswith('erev_')
-            or sig_day == 'hoshana_rabbah'
-            or (sig_day == 'chol_hamoed_pesach' and j_month == 1 and j_day == 20))
-
 
 def is_chol_hamoed(sig_day):
     if sig_day is None:
@@ -485,7 +478,8 @@ def date_info(year, month, day, in_israel=True):
           'significant_day': str or None,
           'is_assur_bemelacha': bool,
           'is_yom_tov': bool,
-          'is_erev_yom_tov': bool,
+          'is_erev_yom_tov': bool,             # מחר יום טוב אסור במלאכה
+          'is_motzei_assur_bemelacha': bool,   # היום אסור AND מחר לא אסור
           'is_chol_hamoed': bool,
           'is_taanis': bool,
           'is_rosh_chodesh': bool,
@@ -497,6 +491,12 @@ def date_info(year, month, day, in_israel=True):
     dow = day_of_week(year, month, day)
     sig = significant_day(j_year, j_month, j_day, dow, in_israel)
     omer = day_of_omer(j_month, j_day)
+    _assur = is_assur_bemelacha(dow, sig)
+
+    tomorrow_dow = dow % 7 + 1
+    t_j_year, t_j_month, t_j_day = _jewish_date_from_abs(_gregorian_to_abs(year, month, day) + 1)
+    tomorrow_sig = significant_day(t_j_year, t_j_month, t_j_day, tomorrow_dow, in_israel)
+    tomorrow_assur = is_assur_bemelacha(tomorrow_dow, tomorrow_sig)
 
     return {
         'j_year':             j_year,
@@ -504,12 +504,13 @@ def date_info(year, month, day, in_israel=True):
         'j_day':              j_day,
         'dow':                dow,
         'significant_day':    sig,
-        'is_assur_bemelacha': is_assur_bemelacha(dow, sig),
-        'is_yom_tov':         is_yom_tov(sig),
-        'is_erev_yom_tov':    is_erev_yom_tov(sig, j_month, j_day),
-        'is_chol_hamoed':     is_chol_hamoed(sig),
-        'is_taanis':          is_taanis(sig),
-        'is_rosh_chodesh':    is_rosh_chodesh(j_month, j_day),
-        'is_shabbat':         dow == 7,
-        'day_of_omer':        omer,
+        'is_assur_bemelacha':        _assur,
+        'is_yom_tov':                is_yom_tov(sig),
+        'is_erev_yom_tov':           tomorrow_sig in _YOM_TOV_ASSUR,
+        'is_motzei_assur_bemelacha': _assur and not tomorrow_assur,
+        'is_chol_hamoed':            is_chol_hamoed(sig),
+        'is_taanis':                 is_taanis(sig),
+        'is_rosh_chodesh':           is_rosh_chodesh(j_month, j_day),
+        'is_shabbat':                dow == 7,
+        'day_of_omer':               omer,
     }

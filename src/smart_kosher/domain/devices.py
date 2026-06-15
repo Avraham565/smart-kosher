@@ -1,7 +1,7 @@
 """JSON-native schemas for zones, endpoints, and groups."""
 
 from .actions import ACTION_TYPES
-from ._values import clone_json, require_non_empty_string, validate_json
+from ._values import clone_json, is_integer, require_non_empty_string, validate_json
 
 
 class DeviceValidationError(ValueError):
@@ -31,6 +31,12 @@ def validate_endpoint(endpoint):
         for field in ("zone_id", "device_type"):
             if field in endpoint:
                 require_non_empty_string(endpoint[field], field)
+        if "ieee_address" in endpoint:
+            require_non_empty_string(endpoint["ieee_address"], "ieee_address")
+        if "zigbee_endpoint" in endpoint:
+            ep = endpoint["zigbee_endpoint"]
+            if not is_integer(ep) or not 1 <= ep <= 254:
+                raise ValueError("zigbee_endpoint must be integer 1-254")
         if "capabilities" in endpoint:
             capabilities = endpoint["capabilities"]
             if not isinstance(capabilities, list):
@@ -61,7 +67,9 @@ def validate_group(group):
 
 
 class _DeviceModel:
-    validator = None
+    @staticmethod
+    def validator(value):
+        raise NotImplementedError("subclass must define validator")
 
     def __init__(self, value):
         self.validator(value)

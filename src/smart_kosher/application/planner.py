@@ -97,6 +97,8 @@ class Planner:
             return info["is_assur_bemelacha"]
         if recurrence_type == "erev_assur_bemelacha":
             return dow == 6 or info["is_erev_yom_tov"]
+        if recurrence_type == "motzei_assur_bemelacha":
+            return info["is_motzei_assur_bemelacha"]
         if recurrence_type == "chol_hamoed":
             return info["is_chol_hamoed"]
         if recurrence_type == "rosh_chodesh":

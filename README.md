@@ -144,7 +144,7 @@ Recurrences:
 
 Actions:
 
-- `on`, `off`, `toggle`, `set_level`, and `dim`.
+- `on`, `off`, and `toggle`.
 
 ## Planned Hardware
 

@@ -1,9 +1,5 @@
 """Repository contract for JSON-native domain entities."""
 
-from ..domain.entities import CONFIG_ENTITY_TYPES
-
-ENTITY_TYPES = CONFIG_ENTITY_TYPES
-
 
 class Repository:
     def get_all(self, entity_type):
