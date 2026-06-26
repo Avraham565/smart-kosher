@@ -2,6 +2,7 @@
 
 from ..domain._values import is_integer
 from ..domain.events import validate_event
+from ..ports.device_gateway import EXECUTION_SUCCESS_STATUSES, GATEWAY_ALL_STATUSES
 
 
 class Executor:
@@ -29,13 +30,13 @@ class Executor:
                 if not isinstance(result, dict):
                     raise ValueError("gateway result must be a dict")
                 status = result.get("status")
-                if status not in ("ack", "timeout", "error"):
+                if status not in GATEWAY_ALL_STATUSES:
                     raise ValueError("gateway result has unsupported status")
                 last_result = dict(result)
             except Exception as exc:
                 last_result = {"status": "error", "error": str(exc)}
 
-            if last_result["status"] == "ack":
+            if last_result["status"] in EXECUTION_SUCCESS_STATUSES:
                 outcome = {
                     "event_id": event_id,
                     "status": "executed",

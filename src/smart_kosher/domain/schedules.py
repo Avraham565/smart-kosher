@@ -52,6 +52,8 @@ def validate_schedule(schedule):
 
         action_data = _dict_field(schedule, "action_data")
         validate_action(schedule.get("action_type"), action_data)
+        if schedule.get("action_type") == "toggle":
+            raise ValueError("toggle is not allowed in schedules; use on or off")
 
         trigger_type = schedule.get("trigger_type")
         trigger_data = _dict_field(schedule, "trigger_data")

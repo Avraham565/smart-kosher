@@ -41,8 +41,8 @@ class DomainTests(unittest.TestCase):
     def test_device_models_return_defensive_copies(self):
         for model in (
             Zone({"id": "kitchen", "name": "Kitchen"}),
-            Endpoint({"id": "light", "capabilities": ["on", "off"]}),
-            Group({"id": "lights", "member_ids": ["light"]}),
+            Endpoint({"id": "light", "name": "Main light", "capabilities": ["on", "off"]}),
+            Group({"id": "lights", "name": "All lights", "member_ids": ["light"]}),
         ):
             copied = model.to_dict()
             copied["id"] = "changed"
@@ -65,6 +65,17 @@ class DomainTests(unittest.TestCase):
         copied["trigger_data"]["h"] = 1
         self.assertEqual(12, model.to_dict()["trigger_data"]["h"])
         self.assertTrue(validate_schedule(value))
+
+    def test_schedule_rejects_toggle_action(self):
+        base = {
+            "id": "sch-1", "target_type": "endpoint", "target_id": "ep1",
+            "trigger_type": "fixed_time", "trigger_data": {"h": 18, "m": 0},
+            "recurrence_type": "daily", "recurrence_data": {},
+        }
+        for action in ("on", "off"):
+            self.assertTrue(validate_schedule({**base, "action_type": action}))
+        with self.assertRaises(ValueError):
+            validate_schedule({**base, "action_type": "toggle"})
 
     def test_event_rejects_invalid_source_date(self):
         with self.assertRaises(ValueError):

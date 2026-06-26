@@ -44,7 +44,7 @@ def event():
 
 class ExecutorTests(unittest.TestCase):
     def test_retries_timeout_then_records_ack(self):
-        gateway = H2Simulator(["timeout", "ack"])
+        gateway = H2Simulator(["timeout", "sent_to_zigbee"])
         journal = MemoryEventJournal()
         outcome = Executor(gateway, journal, max_attempts=3).execute(event())
         self.assertEqual("executed", outcome["status"])
@@ -65,6 +65,13 @@ class ExecutorTests(unittest.TestCase):
         gateway = H2Simulator(["timeout", "error"])
         journal = MemoryEventJournal()
         outcome = Executor(gateway, journal, max_attempts=2).execute(event())
+        self.assertEqual("failed", outcome["status"])
+        self.assertFalse(journal.was_executed("event-1"))
+
+    def test_accepted_by_h2_is_not_recorded_as_executed(self):
+        gateway = H2Simulator(["accepted_by_h2"])
+        journal = MemoryEventJournal()
+        outcome = Executor(gateway, journal, max_attempts=1).execute(event())
         self.assertEqual("failed", outcome["status"])
         self.assertFalse(journal.was_executed("event-1"))
 

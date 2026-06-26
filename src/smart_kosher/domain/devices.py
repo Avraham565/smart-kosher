@@ -12,8 +12,7 @@ def _validate_base(entity):
     if not isinstance(entity, dict):
         raise ValueError("entity must be a dict")
     require_non_empty_string(entity.get("id"), "entity id")
-    if "name" in entity:
-        require_non_empty_string(entity["name"], "name")
+    require_non_empty_string(entity.get("name"), "name")
     validate_json(entity)
 
 
