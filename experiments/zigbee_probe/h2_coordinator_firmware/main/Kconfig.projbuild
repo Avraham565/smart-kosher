@@ -1,0 +1,27 @@
+menu "Smart Kosher H2 Coordinator"
+
+    config COORD_UART_PORT
+        int "UART port used for S3 slot communication"
+        default 1
+
+    config COORD_UART_TXD_PIN
+        int "UART TX GPIO"
+        default 24
+        help
+            Proven CrowPanel Advance slot mapping: H2 GPIO24 -> S3 GPIO19.
+
+    config COORD_UART_RXD_PIN
+        int "UART RX GPIO"
+        default 2
+        help
+            Proven CrowPanel Advance slot mapping: S3 GPIO5 -> H2 GPIO2.
+
+    config COORD_UART_BAUD_RATE
+        int "UART baud rate"
+        default 115200
+
+    config COORD_BOOT_BEACON_COUNT
+        int "Boot beacon repeat count"
+        default 10
+
+endmenu

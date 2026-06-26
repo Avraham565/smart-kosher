@@ -1,0 +1,7 @@
+h2_probe_firmware/build/
+h2_probe_firmware/sdkconfig
+
+h2_coordinator_firmware/build/
+h2_coordinator_firmware/sdkconfig
+h2_coordinator_firmware/dependencies.lock
+h2_coordinator_firmware/managed_components/
