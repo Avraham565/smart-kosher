@@ -1,8 +1,8 @@
-"""Deterministic DeviceGateway simulator for tests.
+"""Deterministic DeviceGateway simulator for application tests.
 
-Uses the same status names as the real H2 firmware (UART_PROTOCOL.md §ACK Status)
-so tests stay protocol-aware. Does NOT simulate UART framing or CRC — use
-UartProtocolCodec for that layer.
+This simulator uses the DeviceGateway internal status contract. It intentionally
+skips UART framing, Zigbee network state, joining, and device addressing. Use
+experiments/zigbee_probe for hardware-proven behavior.
 """
 
 from ..domain._values import clone_json
@@ -36,6 +36,5 @@ class H2Simulator(DeviceGateway):
             result = {"status": "sent_to_zigbee"}
 
         result = dict(result)
-        # Echo command_id so callers can correlate (mirrors real firmware ACK).
         result.setdefault("command_id", event["event_id"])
         return clone_json(result)
