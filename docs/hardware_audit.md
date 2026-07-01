@@ -25,10 +25,9 @@ Proven there:
 
 Known current hardware limits:
 
-- The H2 firmware keeps only one active peer in `s_peer_short` at runtime.
-- The Zigbee network is configured to use NVS storage, but the app-level peer
-  list is not yet persisted separately.
-- Multiple joined devices are not first-class yet.
+- H2 is fully stateless — no device table, no RAM between requests. Per-request only: `s_pending_rid`/`s_pending_short` for async `read_attr` correlation.
+- S3 owns the device registry (`devices` dict) — RAM only for now, not persisted across S3 reboot.
+- Multiple joined devices are supported in the protocol; persistence is the next step.
 - The Python product app does not yet have a production hardware gateway.
 
 ## Keep
@@ -109,14 +108,14 @@ moves from experiments into the product:
 
 ## Next Hardware Step
 
-Start inside `experiments/zigbee_probe/h2_coordinator_firmware/main/main.c`:
+Architecture refactor done (v0.5.0):
+- H2 is fully stateless — `s_devices[]` table removed entirely.
+- S3 supplies both `ieee_addr` and `short_addr` with every `remove_device` command.
+- `ping` returns only firmware/version/network_up — no device list.
+- `read_attr` ack returns `short_addr` only (no `ieee_addr` — H2 doesn't know it).
 
-1. Replace `s_peer_short` with a small device table.
-2. Persist the device table in NVS under the normal `nvs` partition or a small
-   explicit namespace.
-3. Restore and report known devices on boot/ping.
-4. Accept `short_addr` in `on_off` and target that device.
-5. Update `s3_zigbee_probe.py` to join two devices or simulate two known short
-   addresses where possible, then verify independent ON/OFF.
-
-Only after that should product code grow a new hardware gateway adapter.
+Remaining steps before product adapter:
+1. Persist `devices` dict on S3 to `/devices.json` (survive S3 reboot).
+2. Add device names in S3 registry.
+3. Multi-device probe test: join two devices, verify independent ON/OFF.
+4. Only then grow a new hardware gateway adapter in `src/`.

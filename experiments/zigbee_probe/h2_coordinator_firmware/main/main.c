@@ -2,9 +2,9 @@
  * Gate-2 coordinator firmware — ESP32-H2
  * esp-zigbee-sdk v2.x  /  ESP-IDF ≥5.2
  *
- * Forms a Zigbee network, accepts one device join, exposes three UART
- * commands (permit_join / on_off / read_attr) to the S3 host probe.
- * Same CRC-32/JSON framing as the Gate-1 h2_probe_firmware.
+ * H2 is a pure execution arm — no device state, no table.
+ * S3 owns the device registry and supplies all addressing per command.
+ * Only per-request state: s_pending_rid/short for async read_attr.
  */
 
 #include <inttypes.h>
@@ -30,31 +30,47 @@
 
 /* ── constants ──────────────────────────────────────────────────── */
 
-#define TAG          "H2_COORD"
-#define FW_NAME      "smart_kosher_h2_coordinator"
-#define FW_VERSION   "0.3.0"
-#define COORD_EP     1
+#define TAG        "H2_COORD"
+#define FW_NAME    "smart_kosher_h2_coordinator"
+#define FW_VERSION "0.5.0"
+#define COORD_EP   1
 
+#define UART_PORT   ((uart_port_t)CONFIG_COORD_UART_PORT)
+#define RX_BUF_SIZE 1024
+#define MAX_LINE    512
 
-#define UART_PORT    ((uart_port_t)CONFIG_COORD_UART_PORT)
-#define RX_BUF_SIZE  1024
-#define MAX_LINE     512
+#define ZB_ALL_CH  0x07FFF800U
+#define ZB_STORAGE "zb_storage"
 
-/* channels 11-26 in one bitmask — let BDB choose freely */
-#define ZB_ALL_CH    0x07FFF800U
-#define ZB_STORAGE   "zb_storage"
+/* ── global state — minimal ─────────────────────────────────────── */
 
-/* ── global state ───────────────────────────────────────────────── */
-
-static uint16_t          s_peer_short  = 0xFFFF;
-static uint8_t           s_peer_ep     = 1;
-static bool              s_net_up      = false;
+static bool              s_net_up        = false;
 static char              s_pending_rid[48];
+static uint16_t          s_pending_short = 0xFFFF;
 static SemaphoreHandle_t s_uart_mutex;
+
+/* ── IEEE address helpers ───────────────────────────────────────── */
+
+static void ieee_to_str(const uint8_t *ieee, char *buf, size_t len)
+{
+    snprintf(buf, len, "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+             ieee[7], ieee[6], ieee[5], ieee[4],
+             ieee[3], ieee[2], ieee[1], ieee[0]);
+}
+
+static bool ieee_from_str(const char *s, uint8_t *out)
+{
+    unsigned v[8];
+    if (sscanf(s, "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+               &v[7], &v[6], &v[5], &v[4],
+               &v[3], &v[2], &v[1], &v[0]) != 8)
+        return false;
+    for (int i = 0; i < 8; i++) out[i] = (uint8_t)v[i];
+    return true;
+}
 
 /* ── CRC-32 ─────────────────────────────────────────────────────── */
 
-/* matches Gate-1 probe: esp_crc32_le(init=0) == Python binascii.crc32(data) */
 static uint32_t crc_of(const char *body)
 {
     return esp_crc32_le(0, (const uint8_t *)body, strlen(body));
@@ -74,12 +90,7 @@ static void uart_send_json(cJSON *root)
     uart_write_bytes(UART_PORT, "\n", 1);
     xSemaphoreGive(s_uart_mutex);
     free(body);
-    /* caller owns root — not freed here */
 }
-
-/* payload ownership: cJSON_AddItemToObject transfers ownership to root,
-   so cJSON_Delete(root) also frees payload.  Callers must NOT free payload
-   after calling send_event / send_ack. */
 
 static void send_event(const char *op, cJSON *payload)
 {
@@ -128,13 +139,17 @@ static void zcl_action_handler(ezb_zcl_core_action_callback_id_t cb_id,
         ezb_zcl_cmd_read_attr_rsp_message_t *rsp = message;
         ezb_zcl_read_attr_rsp_variable_t    *var = rsp->in.variables;
         while (var) {
-            if (var->attr_id == 0x0000 /* OnOff attribute */ && var->attr_value) {
+            if (var->attr_id == 0x0000 /* OnOff */ && var->attr_value) {
                 uint8_t raw = *(uint8_t *)var->attr_value;
-                cJSON *p    = cJSON_CreateObject();
-                cJSON_AddBoolToObject(p, "on_off", raw != 0);
+                char short_s[8];
+                snprintf(short_s, sizeof(short_s), "0x%04x", s_pending_short);
+                cJSON *p = cJSON_CreateObject();
+                cJSON_AddBoolToObject(p,   "on_off",     raw != 0);
+                cJSON_AddStringToObject(p, "short_addr", short_s);
                 send_ack(s_pending_rid[0] ? s_pending_rid : NULL,
                          "read_attr", "ok", p);
                 s_pending_rid[0] = '\0';
+                s_pending_short  = 0xFFFF;
                 break;
             }
             var = var->next;
@@ -145,7 +160,7 @@ static void zcl_action_handler(ezb_zcl_core_action_callback_id_t cb_id,
     }
 }
 
-/* ── App signal handler (registered; Zigbee-task context) ──────── */
+/* ── App signal handler (Zigbee-task context) ───────────────────── */
 
 static bool app_signal_handler(const ezb_app_signal_t *sig)
 {
@@ -192,7 +207,6 @@ static bool app_signal_handler(const ezb_app_signal_t *sig)
                 ezb_nwk_get_current_channel());
             cJSON_AddNumberToObject(p, "pan_id", ezb_nwk_get_panid());
             send_event("network_formed", p);
-            /* open permit-join so devices can join */
             ezb_bdb_start_top_level_commissioning(
                 EZB_BDB_MODE_NETWORK_STEERING);
         } else {
@@ -214,13 +228,15 @@ static bool app_signal_handler(const ezb_app_signal_t *sig)
     case EZB_ZDO_SIGNAL_DEVICE_ANNCE: {
         const ezb_zdo_signal_device_annce_params_t *ann =
             ezb_app_signal_get_params(sig);
-        s_peer_short = ann->short_addr;
-        ESP_LOGI(TAG, "device joined: 0x%04hx", s_peer_short);
-        char addr[8];
-        snprintf(addr, sizeof(addr), "0x%04x", s_peer_short);
+        char ieee_s[24];
+        char short_s[8];
+        ieee_to_str(ann->device_addr.u8, ieee_s, sizeof(ieee_s));
+        snprintf(short_s, sizeof(short_s), "0x%04x", ann->short_addr);
+        ESP_LOGI(TAG, "device joined: %s short=%s", ieee_s, short_s);
         cJSON *p = cJSON_CreateObject();
-        cJSON_AddStringToObject(p, "short_addr", addr);
-        cJSON_AddNumberToObject(p, "endpoint", s_peer_ep);
+        cJSON_AddStringToObject(p, "ieee_addr",  ieee_s);
+        cJSON_AddStringToObject(p, "short_addr", short_s);
+        cJSON_AddNumberToObject(p, "endpoint",   1);
         send_event("device_joined", p);
         break;
     }
@@ -240,12 +256,10 @@ static bool app_signal_handler(const ezb_app_signal_t *sig)
     return true;
 }
 
-/* ── Command handlers (UART-task context; lock before Zigbee API) ─ */
+/* ── Command handlers (UART-task context) ───────────────────────── */
 
 static void cmd_ping(const char *rid)
 {
-    char addr[8];
-    snprintf(addr, sizeof(addr), "0x%04x", s_peer_short);
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "version", 1);
     cJSON_AddStringToObject(root, "type", "ack");
@@ -253,11 +267,9 @@ static void cmd_ping(const char *rid)
     cJSON_AddStringToObject(root, "status", "pong");
     if (rid) cJSON_AddStringToObject(root, "request_id", rid);
     cJSON *p = cJSON_AddObjectToObject(root, "payload");
-    cJSON_AddStringToObject(p, "firmware", FW_NAME);
+    cJSON_AddStringToObject(p, "firmware",         FW_NAME);
     cJSON_AddStringToObject(p, "firmware_version", FW_VERSION);
-    cJSON_AddBoolToObject(p, "network_up", s_net_up);
-    cJSON_AddStringToObject(p, "peer_addr",
-                            s_peer_short == 0xFFFF ? "none" : addr);
+    cJSON_AddBoolToObject(p,   "network_up",       s_net_up);
     uart_send_json(root);
     cJSON_Delete(root);
 }
@@ -280,24 +292,27 @@ static void cmd_permit_join(const char *rid, cJSON *payload)
 
 static void cmd_on_off(const char *rid, cJSON *payload)
 {
-    uint16_t target = s_peer_short;
-    bool on = true;
-    if (payload) {
-        cJSON *s = cJSON_GetObjectItemCaseSensitive(payload, "state");
-        if (cJSON_IsString(s)) on = strcmp(s->valuestring, "on") == 0;
-        /* S3 may supply the address explicitly — use it if valid */
-        cJSON *a = cJSON_GetObjectItemCaseSensitive(payload, "short_addr");
-        if (cJSON_IsString(a)) {
-            unsigned long v = strtoul(a->valuestring, NULL, 16);
-            if (v > 0 && v < 0xFFFF) target = (uint16_t)v;
-        }
-    }
-    if (target == 0xFFFF) { send_error(rid, "no_device", NULL); return; }
+    if (!payload) { send_error(rid, "missing_payload", NULL); return; }
+
+    cJSON *s = cJSON_GetObjectItemCaseSensitive(payload, "state");
+    cJSON *a = cJSON_GetObjectItemCaseSensitive(payload, "short_addr");
+    if (!cJSON_IsString(s)) { send_error(rid, "missing_state", NULL); return; }
+    if (!cJSON_IsString(a)) { send_error(rid, "missing_addr",  NULL); return; }
+
+    bool on = strcmp(s->valuestring, "on") == 0;
+    unsigned long v = strtoul(a->valuestring, NULL, 16);
+    if (v == 0 || v >= 0xFFFF) { send_error(rid, "bad_addr", NULL); return; }
+    uint16_t target = (uint16_t)v;
+
+    uint8_t ep = 1;
+    cJSON *e = cJSON_GetObjectItemCaseSensitive(payload, "endpoint");
+    if (cJSON_IsNumber(e)) ep = (uint8_t)e->valueint;
+
     ezb_zcl_on_off_cmd_t cmd = {
         .cmd_ctrl = {
             .dst_addr.addr_mode    = EZB_ADDR_MODE_SHORT,
             .dst_addr.u.short_addr = target,
-            .dst_ep                = s_peer_ep,
+            .dst_ep                = ep,
             .src_ep                = COORD_EP,
         },
     };
@@ -305,27 +320,42 @@ static void cmd_on_off(const char *rid, cJSON *payload)
     if (on) ezb_zcl_on_off_on_cmd_req(&cmd);
     else    ezb_zcl_on_off_off_cmd_req(&cmd);
     esp_zigbee_lock_release();
+
     cJSON *p = cJSON_CreateObject();
-    cJSON_AddStringToObject(p, "state", on ? "on" : "off");
+    cJSON_AddStringToObject(p, "state",      on ? "on" : "off");
+    cJSON_AddStringToObject(p, "short_addr", a->valuestring);
     send_ack(rid, "on_off", "ok", p);
 }
 
-static void cmd_read_attr(const char *rid)
+static void cmd_read_attr(const char *rid, cJSON *payload)
 {
-    if (s_peer_short == 0xFFFF) { send_error(rid, "no_device", NULL); return; }
+    if (!payload) { send_error(rid, "missing_payload", NULL); return; }
+
+    cJSON *a = cJSON_GetObjectItemCaseSensitive(payload, "short_addr");
+    if (!cJSON_IsString(a)) { send_error(rid, "missing_addr", NULL); return; }
+
+    unsigned long v = strtoul(a->valuestring, NULL, 16);
+    if (v == 0 || v >= 0xFFFF) { send_error(rid, "bad_addr", NULL); return; }
+    uint16_t target = (uint16_t)v;
+
+    uint8_t ep = 1;
+    cJSON *e = cJSON_GetObjectItemCaseSensitive(payload, "endpoint");
+    if (cJSON_IsNumber(e)) ep = (uint8_t)e->valueint;
+
     if (rid) {
         strncpy(s_pending_rid, rid, sizeof(s_pending_rid) - 1);
         s_pending_rid[sizeof(s_pending_rid) - 1] = '\0';
     } else {
         s_pending_rid[0] = '\0';
     }
-    /* static OK: only one read_attr in flight (probe is sequential) */
+    s_pending_short = target;
+
     static uint16_t attr_list[] = { 0x0000 /* OnOff */ };
 
     ezb_zcl_read_attr_cmd_t req = {0};
     req.cmd_ctrl.dst_addr.addr_mode    = EZB_ADDR_MODE_SHORT;
-    req.cmd_ctrl.dst_addr.u.short_addr = s_peer_short;
-    req.cmd_ctrl.dst_ep                = s_peer_ep;
+    req.cmd_ctrl.dst_addr.u.short_addr = target;
+    req.cmd_ctrl.dst_ep                = ep;
     req.cmd_ctrl.src_ep                = COORD_EP;
     req.cmd_ctrl.fc.direction          = EZB_ZCL_CMD_DIRECTION_TO_SRV;
     req.cmd_ctrl.cluster_id            = EZB_ZCL_CLUSTER_ID_ON_OFF;
@@ -336,6 +366,41 @@ static void cmd_read_attr(const char *rid)
     ezb_zcl_read_attr_cmd_req(&req);
     esp_zigbee_lock_release();
     /* async response arrives via zcl_action_handler */
+}
+
+static void cmd_remove_device(const char *rid, cJSON *payload)
+{
+    if (!payload) { send_error(rid, "missing_payload", NULL); return; }
+
+    cJSON *ia = cJSON_GetObjectItemCaseSensitive(payload, "ieee_addr");
+    cJSON *sa = cJSON_GetObjectItemCaseSensitive(payload, "short_addr");
+    if (!cJSON_IsString(ia)) { send_error(rid, "missing_ieee",  NULL); return; }
+    if (!cJSON_IsString(sa)) { send_error(rid, "missing_short", NULL); return; }
+
+    uint8_t ieee[8];
+    if (!ieee_from_str(ia->valuestring, ieee)) {
+        send_error(rid, "bad_ieee", NULL);
+        return;
+    }
+    unsigned long v = strtoul(sa->valuestring, NULL, 16);
+    if (v == 0 || v >= 0xFFFF) { send_error(rid, "bad_addr", NULL); return; }
+    uint16_t short_addr = (uint16_t)v;
+
+    ezb_zdo_nwk_mgmt_leave_req_t leave = {0};
+    leave.dst_nwk_addr          = short_addr;
+    memcpy(leave.field.device_addr.u8, ieee, 8);
+    leave.field.remove_children = 0;
+    leave.field.rejoin          = 0;
+    leave.cb                    = NULL;
+    leave.user_ctx              = NULL;
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    ezb_zdo_nwk_mgmt_leave_req(&leave);
+    esp_zigbee_lock_release();
+
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "ieee_addr",  ia->valuestring);
+    cJSON_AddStringToObject(p, "short_addr", sa->valuestring);
+    send_ack(rid, "remove_device", "ok", p);
 }
 
 /* ── UART frame parser ──────────────────────────────────────────── */
@@ -370,15 +435,18 @@ static void handle_frame(char *line)
     if (cJSON_IsString(f)) op = f->valuestring;
     cJSON *pl = cJSON_GetObjectItemCaseSensitive(root, "payload");
 
-    if      (!op)                            send_error(rid, "bad_json", "missing op");
-    else if (strcmp(op, "ping")       == 0)  cmd_ping(rid);
-    else if (strcmp(op, "permit_join")== 0)  cmd_permit_join(rid, pl);
-    else if (strcmp(op, "on_off")     == 0)  cmd_on_off(rid, pl);
-    else if (strcmp(op, "read_attr")  == 0)  cmd_read_attr(rid);
-    else                                     send_error(rid, "unknown_op", op);
+    if      (!op)                                send_error(rid, "bad_json", "missing op");
+    else if (strcmp(op, "ping")          == 0)   cmd_ping(rid);
+    else if (strcmp(op, "permit_join")   == 0)   cmd_permit_join(rid, pl);
+    else if (strcmp(op, "on_off")        == 0)   cmd_on_off(rid, pl);
+    else if (strcmp(op, "read_attr")     == 0)   cmd_read_attr(rid, pl);
+    else if (strcmp(op, "remove_device") == 0)   cmd_remove_device(rid, pl);
+    else                                         send_error(rid, "unknown_op", op);
 
     cJSON_Delete(root);
 }
+
+/* ── UART reader task ───────────────────────────────────────────── */
 
 static void uart_reader_task(void *arg)
 {
@@ -422,13 +490,11 @@ static void zigbee_task(void *arg)
     };
     ESP_ERROR_CHECK(esp_zigbee_init(&cfg));
 
-    /* channel + security setup (must be before esp_zigbee_start) */
     ezb_aps_secur_enable_distributed_security(false);
     ESP_ERROR_CHECK(ezb_bdb_set_primary_channel_set(ZB_ALL_CH));
     ESP_ERROR_CHECK(ezb_bdb_set_secondary_channel_set(ZB_ALL_CH));
     ESP_ERROR_CHECK(ezb_app_signal_add_handler(app_signal_handler));
 
-    /* coordinator acts as an on/off switch (issues commands, source ep=1) */
     ezb_af_device_desc_t            dev    = ezb_af_create_device_desc();
     ezb_zha_on_off_switch_config_t  sw_cfg = EZB_ZHA_ON_OFF_SWITCH_CONFIG();
     ezb_af_ep_desc_t                ep     =
@@ -438,7 +504,7 @@ static void zigbee_task(void *arg)
     ezb_zcl_core_action_handler_register(zcl_action_handler);
 
     ESP_ERROR_CHECK(esp_zigbee_start(false));
-    esp_zigbee_launch_mainloop();   /* never returns while stack is running */
+    esp_zigbee_launch_mainloop();
     esp_zigbee_deinit();
     vTaskDelete(NULL);
 }
@@ -479,14 +545,13 @@ void app_main(void)
     s_uart_mutex = xSemaphoreCreateMutex();
     init_uart();
 
-    /* boot beacon — repeated so the S3 doesn't miss it on power-up race */
     {
         cJSON *root = cJSON_CreateObject();
         cJSON_AddNumberToObject(root, "version", 1);
         cJSON_AddStringToObject(root, "type", "event");
         cJSON_AddStringToObject(root, "op", "boot");
         cJSON *p = cJSON_AddObjectToObject(root, "payload");
-        cJSON_AddStringToObject(p, "firmware", FW_NAME);
+        cJSON_AddStringToObject(p, "firmware",         FW_NAME);
         cJSON_AddStringToObject(p, "firmware_version", FW_VERSION);
         cJSON_AddNumberToObject(p, "uart_tx_pin", CONFIG_COORD_UART_TXD_PIN);
         cJSON_AddNumberToObject(p, "uart_rx_pin", CONFIG_COORD_UART_RXD_PIN);
@@ -499,6 +564,6 @@ void app_main(void)
         cJSON_Delete(root);
     }
 
-    xTaskCreate(uart_reader_task, "coord_uart", 4096,  NULL, 10, NULL);
-    xTaskCreate(zigbee_task,      "zb_main",    8192,  NULL,  5, NULL);
+    xTaskCreate(uart_reader_task, "coord_uart", 4096, NULL, 10, NULL);
+    xTaskCreate(zigbee_task,      "zb_main",    8192, NULL,  5, NULL);
 }

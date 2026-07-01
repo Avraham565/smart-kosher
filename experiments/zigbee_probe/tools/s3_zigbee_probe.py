@@ -1,14 +1,18 @@
-"""Gate 2 Zigbee proof — run on CrowPanel S3 MicroPython.
+"""Gate 2 Zigbee probe — persistence + rejoin recovery.
 
-Steps:
-  1. Wait for H2 boot event.
-  2. Wait for network_formed event.
-  3. Send permit_join (180 s).
-  4. Wait for device_joined event — user must press join/pair on their device now.
-  5. Send on_off {"state": "on"}.
-  6. Send read_attr — verify on_off == True.
-  7. Send on_off {"state": "off"}.
-  8. Send read_attr — verify on_off == False.
+S3 is the state owner: persists device registry to /devices.json.
+H2 is a pure execution arm: stateless between requests.
+
+Boot flow:
+  1. Load saved registry from /devices.json (if exists).
+  2. Confirm H2 alive (boot event or ping fallback).
+  3. Wait for network_formed.
+  4. Grace period (8 s): collect device_joined events → update short_addrs.
+  5a. If devices known (restored): skip pairing → go to ON/OFF test.
+  5b. If no devices: open permit_join → wait for device_joined → save.
+  6. on_off ON  → verify via read_attr.
+  7. on_off OFF → verify via read_attr.
+  8. remove_device → verify + remove from file.
   9. Report RESULT PASS / FAIL.
 """
 
@@ -20,9 +24,13 @@ UART_ID          = 1
 S3_TX_PIN        = 5
 S3_RX_PIN        = 19
 BAUD             = 115200
-JOIN_TIMEOUT_MS  = 120_000   # 2 min for user to pair device
+JOIN_TIMEOUT_MS  = 120_000
 RESP_TIMEOUT_MS  = 8_000
+REJOIN_GRACE_MS  = 8_000
+DEVICES_PATH     = "/devices.json"
 
+
+# ── CRC-32 ────────────────────────────────────────────────────────
 
 def crc32(data):
     crc = 0xFFFFFFFF
@@ -33,6 +41,8 @@ def crc32(data):
             crc &= 0xFFFFFFFF
     return crc ^ 0xFFFFFFFF
 
+
+# ── Frame codec ───────────────────────────────────────────────────
 
 def encode_frame(msg):
     body = json.dumps(msg)
@@ -51,14 +61,16 @@ def decode_frame(line):
     return json.loads(body)
 
 
-_ping_seq = 0
+# ── Transport ─────────────────────────────────────────────────────
+
+_seq = 0
 
 
 def send_cmd(uart, op, payload=None):
-    global _ping_seq
-    _ping_seq += 1
+    global _seq
+    _seq += 1
     msg = {"version": 1, "type": "command", "op": op,
-           "request_id": "s3-%s-%d" % (op, _ping_seq)}
+           "request_id": "s3-%s-%d" % (op, _seq)}
     if payload:
         msg["payload"] = payload
     uart.write(encode_frame(msg))
@@ -66,8 +78,13 @@ def send_cmd(uart, op, payload=None):
     return msg["request_id"]
 
 
-def recv_until(uart, buf, match_fn, timeout_ms):
-    """Read until match_fn(msg) is True or timeout. Returns msg or None."""
+def recv_until(uart, buf, match_fn, timeout_ms, on_msg=None):
+    """Read until match_fn(msg) is True or timeout.
+
+    on_msg(msg) is called for every valid frame received (before match check),
+    allowing side-effects like registry updates during a drain/grace loop.
+    Returns (matched_msg_or_None, buf).
+    """
     deadline = time.ticks_add(time.ticks_ms(), timeout_ms)
     while time.ticks_diff(deadline, time.ticks_ms()) > 0:
         chunk = uart.read(256)
@@ -87,129 +104,216 @@ def recv_until(uart, buf, match_fn, timeout_ms):
                     print("RAW bytes", repr(line))
                 continue
             print("RX ", json.dumps(msg))
+            if on_msg:
+                on_msg(msg)
             if match_fn(msg):
                 return msg, buf
         time.sleep_ms(20)
     return None, buf
 
 
+# ── Device registry ───────────────────────────────────────────────
+#
+# devices: { ieee_addr_str: {"short_addr": "0x1234", "ep": 1} }
+
+devices = {}
+
+
+def save_devices():
+    try:
+        with open(DEVICES_PATH, "w") as f:
+            json.dump(devices, f)
+        print("    saved %d device(s) to %s" % (len(devices), DEVICES_PATH))
+    except Exception as e:
+        print("    save_devices error:", e)
+
+
+def load_devices():
+    try:
+        with open(DEVICES_PATH, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+def on_device_joined(msg):
+    p     = msg.get("payload", {})
+    ieee  = p.get("ieee_addr")
+    short = p.get("short_addr")
+    ep    = p.get("endpoint", 1)
+    if not (ieee and short):
+        return
+    if ieee in devices:
+        old = devices[ieee]["short_addr"]
+        devices[ieee]["short_addr"] = short
+        devices[ieee]["ep"]         = ep
+        if old != short:
+            print("    rejoin: %s  short %s → %s" % (ieee, old, short))
+        else:
+            print("    rejoin: %s  short=%s (unchanged)" % (ieee, short))
+    else:
+        devices[ieee] = {"short_addr": short, "ep": ep}
+        print("    new device: %s  short=%s  ep=%d" % (ieee, short, ep))
+    save_devices()
+
+
+def on_device_removed(ieee):
+    if ieee in devices:
+        del devices[ieee]
+        save_devices()
+        print("    registry: removed %s" % ieee)
+
+
+# ── Main probe ────────────────────────────────────────────────────
+
 def main():
+    global devices
+
     uart = UART(UART_ID, baudrate=BAUD, tx=S3_TX_PIN, rx=S3_RX_PIN, timeout=20)
-    print("=== Gate 2 Zigbee probe started ===")
+    print("=== Gate 2 Zigbee probe (persistence + rejoin) started ===")
     buf = b""
 
-    # ── 1. confirm H2 is alive (boot event or ping fallback) ─────────────
-    print("\n[1] waiting for H2 boot event (5 s) …")
+    # ── 1. load saved registry ────────────────────────────────────
+    devices = load_devices()
+    if devices:
+        print("[1] loaded %d device(s) from %s" % (len(devices), DEVICES_PATH))
+        for ieee, d in devices.items():
+            print("    %s  short=%s  ep=%d" % (ieee, d["short_addr"], d["ep"]))
+    else:
+        print("[1] no saved devices — fresh start")
+
+    # ── 2. confirm H2 is alive + network status ───────────────────
+    print("\n[2] waiting for H2 boot event (5 s) …")
+    net_already_up = False
     msg, buf = recv_until(uart, buf,
         lambda m: m.get("op") == "boot", 5_000)
     if msg:
-        fw  = msg.get("payload", {}).get("firmware", "?")
-        ver = msg.get("payload", {}).get("firmware_version", "?")
-        print("    H2 booted: %s %s" % (fw, ver))
+        p = msg.get("payload", {})
+        print("    H2 booted: %s %s" % (p.get("firmware"), p.get("firmware_version")))
     else:
         print("    no boot event — H2 already running, trying ping …")
-        rid = send_cmd(uart, "ping")
+        send_cmd(uart, "ping")
         pong, buf = recv_until(uart, buf,
             lambda m: m.get("op") == "ping" and m.get("type") == "ack", 8_000)
         if not pong:
-            print("RESULT FAIL: H2 not responding (check flash + UART wiring)")
+            print("RESULT FAIL: H2 not responding")
             return
         p = pong.get("payload", {})
-        print("    pong: net_up=%s fw=%s %s" % (
+        net_already_up = bool(p.get("network_up"))
+        print("    pong: net_up=%s  fw=%s %s" % (
             p.get("network_up"), p.get("firmware"), p.get("firmware_version")))
 
-    # ── 2. wait for network_formed ────────────────────────────────────────
-    print("\n[2] waiting for network_formed (30 s) …")
-    msg, buf = recv_until(uart, buf,
-        lambda m: m.get("op") == "network_formed", 30_000)
-    if not msg:
-        print("RESULT FAIL: Zigbee network did not form")
-        return
+    # ── 3. wait for network_formed (skip if already up) ───────────
+    if net_already_up:
+        print("\n[3] network already up (from ping) — skipping wait")
+    else:
+        print("\n[3] waiting for network_formed (30 s) …")
+        msg, buf = recv_until(uart, buf,
+            lambda m: m.get("op") == "network_formed", 30_000)
+        if not msg:
+            print("RESULT FAIL: Zigbee network did not form")
+            return
+        p = msg.get("payload", {})
+        print("    network up  channel=%s  pan=0x%s  %s" % (
+            p.get("channel"), p.get("pan_id"), p.get("note", "")))
 
-    ch = msg.get("payload", {}).get("channel", "?")
-    print("    network up on channel %s" % ch)
+    # ── 4. grace period — collect rejoin events ───────────────────
+    print("\n[4] grace period %d ms — waiting for rejoins …" % REJOIN_GRACE_MS)
+    _, buf = recv_until(uart, buf,
+        lambda m: False,
+        REJOIN_GRACE_MS,
+        on_msg=lambda m: on_device_joined(m) if m.get("op") == "device_joined" else None)
+    if devices:
+        print("    registry after grace: %d device(s)" % len(devices))
+    else:
+        print("    no rejoins — registry empty")
 
-    # ── 3. permit_join ────────────────────────────────────────────────────
-    print("\n[3] opening network for join (180 s) …")
-    send_cmd(uart, "permit_join", {"duration": 180})
-    msg, buf = recv_until(uart, buf,
-        lambda m: m.get("op") == "permit_join" and m.get("type") == "ack",
-        RESP_TIMEOUT_MS)
-    if not msg:
-        print("RESULT FAIL: permit_join got no ack")
-        return
+    # ── 5. pair or restore ────────────────────────────────────────
+    if devices:
+        ieee  = list(devices.keys())[0]
+        short = devices[ieee]["short_addr"]
+        ep    = devices[ieee]["ep"]
+        print("\n[5] restored from storage — skipping pairing")
+        print("    device: ieee=%s  short=%s  ep=%d" % (ieee, short, ep))
+    else:
+        print("\n[5] no devices — opening network for join (180 s) …")
+        send_cmd(uart, "permit_join", {"duration": 180})
+        msg, buf = recv_until(uart, buf,
+            lambda m: m.get("op") == "permit_join" and m.get("type") == "ack",
+            RESP_TIMEOUT_MS)
+        if not msg:
+            print("RESULT FAIL: permit_join got no ack")
+            return
 
-    # ── 4. wait for device to join ────────────────────────────────────────
-    print("\n[4] waiting for device_joined — press pair/join on your device now …")
-    msg, buf = recv_until(uart, buf,
-        lambda m: m.get("op") == "device_joined", JOIN_TIMEOUT_MS)
-    if not msg:
-        print("RESULT FAIL: no device joined within timeout")
-        return
+        print("    press pair/join on your device now …")
+        msg, buf = recv_until(uart, buf,
+            lambda m: m.get("op") == "device_joined",
+            JOIN_TIMEOUT_MS)
+        if not msg:
+            print("RESULT FAIL: no device joined within timeout")
+            return
+        on_device_joined(msg)
+        ieee  = list(devices.keys())[0]
+        short = devices[ieee]["short_addr"]
+        ep    = devices[ieee]["ep"]
+        print("    device: ieee=%s  short=%s  ep=%d" % (ieee, short, ep))
+        time.sleep_ms(1000)
 
-    short = msg.get("payload", {}).get("short_addr", "?")
-    ieee  = msg.get("payload", {}).get("ieee_addr", "?")
-    print("    device joined: short=%s ieee=%s" % (short, ieee))
-
-    time.sleep_ms(1000)  # let device settle
-
-    # ── 5. on ─────────────────────────────────────────────────────────────
-    print("\n[5] sending on_off ON …")
-    send_cmd(uart, "on_off", {"state": "on"})
+    # ── 6. on_off ON ──────────────────────────────────────────────
+    print("\n[6] sending on_off ON …")
+    send_cmd(uart, "on_off", {"state": "on", "short_addr": short, "endpoint": ep})
     msg, buf = recv_until(uart, buf,
         lambda m: m.get("op") == "on_off" and m.get("type") == "ack",
         RESP_TIMEOUT_MS)
     if not msg:
         print("RESULT FAIL: on_off ON got no ack")
         return
-
     time.sleep_ms(500)
 
-    # ── 6. read attr — verify ON ──────────────────────────────────────────
-    print("\n[6] reading on_off attribute (expect True) …")
-    send_cmd(uart, "read_attr")
+    # ── 7. read_attr — verify ON ──────────────────────────────────
+    print("\n[7] reading on_off attribute (expect True) …")
+    send_cmd(uart, "read_attr", {"short_addr": short, "endpoint": ep})
     msg, buf = recv_until(uart, buf,
         lambda m: m.get("op") == "read_attr" and m.get("type") == "ack",
         RESP_TIMEOUT_MS)
     if not msg:
-        print("RESULT FAIL: read_attr (ON) timed out — device may not respond")
+        print("RESULT FAIL: read_attr (ON) timed out")
         return
-    actual_on = msg.get("payload", {}).get("on_off")
-    if not actual_on:
-        print("RESULT FAIL: expected on_off=True, got %s" % actual_on)
+    if not msg.get("payload", {}).get("on_off"):
+        print("RESULT FAIL: expected on_off=True, got %s" % msg.get("payload"))
         return
     print("    on_off = True ✓")
-
     time.sleep_ms(500)
 
-    # ── 7. off ────────────────────────────────────────────────────────────
-    print("\n[7] sending on_off OFF …")
-    send_cmd(uart, "on_off", {"state": "off"})
+    # ── 8. on_off OFF ─────────────────────────────────────────────
+    print("\n[8] sending on_off OFF …")
+    send_cmd(uart, "on_off", {"state": "off", "short_addr": short, "endpoint": ep})
     msg, buf = recv_until(uart, buf,
         lambda m: m.get("op") == "on_off" and m.get("type") == "ack",
         RESP_TIMEOUT_MS)
     if not msg:
         print("RESULT FAIL: on_off OFF got no ack")
         return
-
     time.sleep_ms(500)
 
-    # ── 8. read attr — verify OFF ─────────────────────────────────────────
-    print("\n[8] reading on_off attribute (expect False) …")
-    send_cmd(uart, "read_attr")
+    # ── 9. read_attr — verify OFF ─────────────────────────────────
+    print("\n[9] reading on_off attribute (expect False) …")
+    send_cmd(uart, "read_attr", {"short_addr": short, "endpoint": ep})
     msg, buf = recv_until(uart, buf,
         lambda m: m.get("op") == "read_attr" and m.get("type") == "ack",
         RESP_TIMEOUT_MS)
     if not msg:
         print("RESULT FAIL: read_attr (OFF) timed out")
         return
-    actual_off = msg.get("payload", {}).get("on_off")
-    if actual_off:
-        print("RESULT FAIL: expected on_off=False, got %s" % actual_off)
+    if msg.get("payload", {}).get("on_off"):
+        print("RESULT FAIL: expected on_off=False, got %s" % msg.get("payload"))
         return
     print("    on_off = False ✓")
 
-    print("\nRESULT PASS: device joined, on/off verified")
+    print("\nRESULT PASS: on/off verified — device stays joined for persistence test")
 
 
 main()

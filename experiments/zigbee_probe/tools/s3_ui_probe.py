@@ -216,12 +216,44 @@ def _init_touch(i2c: I2C):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Device registry persistence
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEVICES_PATH = "/devices.json"
+_devices = {}   # { ieee_str: {"short_addr": "0x...", "ep": 1} }
+
+
+def _save_devices():
+    try:
+        with open(DEVICES_PATH, "w") as f:
+            json.dump(_devices, f)
+    except Exception as e:
+        _log("save error: %s" % e)
+
+
+def _load_devices():
+    try:
+        with open(DEVICES_PATH, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        return data
+    except Exception:
+        return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # UI state
 # ─────────────────────────────────────────────────────────────────────────────
 
-_net_ch   = None   # str, e.g. "15"
-_net_pan  = None   # str, e.g. "0xABCD"
-_dev_addr = None   # str, e.g. "0x9F12"
+_net_ch          = None   # str, e.g. "15"
+_net_pan         = None   # str, e.g. "0xABCD"
+_dev_addr        = None   # short_addr of selected device
+_dev_state       = None   # "ON" / "OFF" / None
+_selected_ieee   = None   # IEEE of selected device
+_connect_btn     = None   # lv.button ref — toggled between CONNECT / DISCONNECT
+_device_list_obj = None   # lv.obj container for device rows
+_device_rows     = {}     # { ieee: lv.obj }
 
 _log_lines: list = []
 _MAX_LOG   = 64   # lines kept in memory; only last 10 shown
@@ -243,14 +275,108 @@ def _log(text: str):
         _log_lbl.set_text("\n".join(_log_lines[-10:]))
 
 
+def _no_scroll(obj):
+    obj.remove_flag(lv.obj.FLAG.SCROLLABLE)
+    for _name in ("SCROLL_CHAIN_HOR", "SCROLL_CHAIN_VER", "SCROLL_CHAIN"):
+        try:
+            obj.clear_flag(getattr(lv.obj.FLAG, _name))
+        except Exception:
+            pass
+
+
+def _short_ieee(ieee):
+    parts = ieee.split(":")
+    if len(parts) == 8:
+        return "%s:%s:..:..:%s:%s" % (parts[0], parts[1], parts[6], parts[7])
+    return ieee[:22]
+
+
+def _select_device(ieee):
+    global _selected_ieee, _dev_addr, _dev_state
+    _selected_ieee = ieee
+    _dev_addr      = _devices[ieee]["short_addr"] if ieee and ieee in _devices else None
+    _dev_state     = None
+    _rebuild_device_list()
+    _update_connect_btn()
+    _refresh_status()
+
+
+def _rebuild_device_list():
+    global _device_rows
+    if _device_list_obj is None:
+        return
+    _device_list_obj.clean()
+    _device_rows = {}
+    y = 5
+    for ieee, d in _devices.items():
+        sel = (ieee == _selected_ieee)
+        row = lv.obj(_device_list_obj)
+        row.set_size(508, 58)
+        row.set_pos(5, y)
+        row.set_style_bg_color(lv.color_hex(0x1E3A5F if sel else 0x0D1B2A), lv.PART.MAIN)
+        row.set_style_border_width(0, lv.PART.MAIN)
+        row.set_style_radius(6, lv.PART.MAIN)
+        _no_scroll(row)
+        if sel:
+            bar = lv.obj(row)
+            bar.set_size(4, 58)
+            bar.set_pos(0, 0)
+            bar.set_style_bg_color(lv.color_hex(0x00E676), lv.PART.MAIN)
+            bar.set_style_border_width(0, lv.PART.MAIN)
+            bar.set_style_radius(0, lv.PART.MAIN)
+        lbl_i = lv.label(row)
+        lbl_i.set_style_text_font(lv.font_montserrat_14, lv.PART.MAIN)
+        lbl_i.set_style_text_color(
+            lv.color_hex(0x7EC8E3 if sel else 0x8899AA), lv.PART.MAIN)
+        lbl_i.set_text(_short_ieee(ieee))
+        lbl_i.set_pos(10, 5)
+        lbl_s = lv.label(row)
+        lbl_s.set_style_text_font(lv.font_montserrat_16, lv.PART.MAIN)
+        lbl_s.set_style_text_color(
+            lv.color_hex(0xFFFFFF if sel else 0xCCCCCC), lv.PART.MAIN)
+        lbl_s.set_text(d["short_addr"])
+        lbl_s.set_pos(10, 30)
+        def _make_select_cb(dev_ieee):
+            def cb(e): _select_device(dev_ieee)
+            return cb
+        def _make_remove_cb(dev_ieee):
+            def cb(e): _remove_device(dev_ieee)
+            return cb
+        row.add_flag(lv.obj.FLAG.CLICKABLE)
+        row.add_event_cb(_make_select_cb(ieee), lv.EVENT.CLICKED, None)
+
+        x_btn = lv.button(row)
+        x_btn.set_size(44, 40)
+        x_btn.set_pos(460, 9)
+        x_btn.set_style_bg_color(lv.color_hex(0x5A0000), lv.PART.MAIN)
+        x_btn.set_style_bg_color(lv.color_hex(0x8B0000), lv.PART.MAIN | lv.STATE.PRESSED)
+        x_btn.set_style_border_width(0, lv.PART.MAIN)
+        x_btn.set_style_radius(6, lv.PART.MAIN)
+        x_lbl = lv.label(x_btn)
+        x_lbl.set_style_text_font(lv.font_montserrat_14, lv.PART.MAIN)
+        x_lbl.set_style_text_color(lv.color_hex(0xFFFFFF), lv.PART.MAIN)
+        x_lbl.set_text("X")
+        x_lbl.center()
+        x_btn.add_event_cb(_make_remove_cb(ieee), lv.EVENT.CLICKED, None)
+
+        _device_rows[ieee] = row
+        y += 65
+
+
+def _update_connect_btn():
+    pass  # CONNECT is always "add device" — no toggle needed
+
+
 def _refresh_status():
     if _status_lbl is None:
         return
-    ch  = _net_ch   or "--"
-    pan = _net_pan  or "--"
-    dev = _dev_addr or "--"
+    ch    = _net_ch    or "--"
+    pan   = _net_pan   or "--"
+    dev   = _dev_addr  or "--"
+    state = _dev_state or "--"
+    n     = len(_devices)
     _status_lbl.set_text(
-        "Network: ch %s  PAN: %s     Device: %s" % (ch, pan, dev)
+        "ch %s  PAN: %s    [%d dev]  sel: %s  %s" % (ch, pan, n, dev, state)
     )
 
 
@@ -276,25 +402,63 @@ def _handle(msg: dict):
         _refresh_status()
 
     elif op == "device_joined":
-        _dev_addr = p.get("short_addr", "?")
-        _log("Device joined  addr=%s" % _dev_addr)
+        global _devices, _selected_ieee
+        ieee  = p.get("ieee_addr", "")
+        short = p.get("short_addr", "?")
+        ep    = p.get("endpoint", 1)
+        if ieee:
+            if ieee in _devices:
+                old = _devices[ieee]["short_addr"]
+                _devices[ieee] = {"short_addr": short, "ep": ep}
+                if old != short:
+                    _log("Rejoin  %s  %s→%s" % (_short_ieee(ieee), old, short))
+                    if _selected_ieee == ieee:
+                        _dev_addr = short
+                else:
+                    _log("Rejoin  %s unchanged" % _short_ieee(ieee))
+            else:
+                _devices[ieee] = {"short_addr": short, "ep": ep}
+                _log("Joined  %s  %s" % (_short_ieee(ieee), short))
+            _save_devices()
+            if _selected_ieee is None:
+                _selected_ieee = ieee
+                _dev_addr      = short
+        else:
+            _log("Device joined  addr=%s" % short)
+        _rebuild_device_list()
+        _update_connect_btn()
         _refresh_status()
 
     elif op == "ping" and mtyp == "ack":
-        global _net_ch, _net_pan
         _boot_seen = True
         net_up = p.get("network_up")
         fw  = p.get("firmware", "")
         ver = p.get("firmware_version", "")
         _log("H2 alive  fw=%s%s  net=%s" % (fw, " "+ver if ver else "", net_up))
-        if p.get("channel"):
-            _net_ch = str(p["channel"])
-        if p.get("pan_id"):
-            _net_pan = p["pan_id"]
-        peer = p.get("peer_addr", "")
-        if peer and peer != "none":
-            _dev_addr = peer
         _refresh_status()
+
+    elif op == "remove_device" and mtyp == "ack":
+        global _dev_addr, _dev_state, _devices, _selected_ieee
+        ieee = p.get("ieee_addr", "")
+        if ieee and ieee in _devices:
+            del _devices[ieee]
+            _save_devices()
+        if _selected_ieee == ieee:
+            _selected_ieee = list(_devices.keys())[0] if _devices else None
+            _dev_addr      = _devices[_selected_ieee]["short_addr"] if _selected_ieee else None
+            _dev_state     = None
+        _log("Removed  %s" % _short_ieee(ieee) if ieee else "Removed")
+        _rebuild_device_list()
+        _update_connect_btn()
+        _refresh_status()
+
+    elif op == "read_attr" and mtyp == "ack":
+        global _dev_state
+        on_off = p.get("on_off")
+        if on_off is not None:
+            _dev_state = "ON" if on_off else "OFF"
+            _log("State: %s" % _dev_state)
+            _refresh_status()
 
     elif mtyp == "ack":
         _log("ACK  op=%s" % op)
@@ -350,19 +514,41 @@ def _uart_poll(timer):
 # Button callbacks
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _remove_device(ieee):
+    if ieee not in _devices:
+        return
+    short = _devices[ieee]["short_addr"]
+    _log(">>> remove  %s" % short)
+    _send(_uart_inst, "remove_device", {"ieee_addr": ieee, "short_addr": short})
+
+
 def _on_connect(e):
     _log(">>> permit_join  duration=180")
     _send(_uart_inst, "permit_join", {"duration": 180})
 
 
 def _on_on(e):
+    if not _dev_addr:
+        _log("No device — press CONNECT first")
+        return
     _log(">>> on_off ON")
-    _send(_uart_inst, "on_off", {"state": "on"})
+    _send(_uart_inst, "on_off", {"state": "on", "short_addr": _dev_addr})
 
 
 def _on_off(e):
+    if not _dev_addr:
+        _log("No device — press CONNECT first")
+        return
     _log(">>> on_off OFF")
-    _send(_uart_inst, "on_off", {"state": "off"})
+    _send(_uart_inst, "on_off", {"state": "off", "short_addr": _dev_addr})
+
+
+def _on_status(e):
+    if not _dev_addr:
+        _log("No device — press CONNECT first")
+        return
+    _log(">>> read_attr")
+    _send(_uart_inst, "read_attr", {"short_addr": _dev_addr, "endpoint": 1})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -394,11 +580,11 @@ def _make_btn(parent, text: str, x: int, y: int, w: int,
 
 
 def build_ui():
-    global _status_lbl, _log_lbl
+    global _status_lbl, _log_lbl, _connect_btn, _device_list_obj
 
     scr = lv.screen_active()
     scr.set_style_bg_color(lv.color_hex(0x0D0D1A), lv.PART.MAIN)
-    scr.remove_flag(lv.obj.FLAG.SCROLLABLE)
+    _no_scroll(scr)
 
     # ── status bar ────────────────────────────────────────────────────────────
     bar = lv.obj(scr)
@@ -408,7 +594,7 @@ def build_ui():
     bar.set_style_border_width(0, lv.PART.MAIN)
     bar.set_style_radius(0, lv.PART.MAIN)
     bar.set_style_pad_all(0, lv.PART.MAIN)
-    bar.remove_flag(lv.obj.FLAG.SCROLLABLE)
+    _no_scroll(bar)
 
     _status_lbl = lv.label(bar)
     _status_lbl.set_width(776)
@@ -418,24 +604,37 @@ def build_ui():
     _status_lbl.align(lv.ALIGN.LEFT_MID, 12, 0)
     _status_lbl.set_text("Network: --  PAN: --     Device: --")
 
-    # ── buttons ───────────────────────────────────────────────────────────────
+    # ── buttons (4 × 187 px, 10 px gaps, 10 px margins) ─────────────────────
     BTN_Y = 52
-    _make_btn(scr, "CONNECT",  30, BTN_Y, 230, 0x0F3460, _on_connect)
-    _make_btn(scr, "ON",      285, BTN_Y, 220, 0x1A6B3C, _on_on)
-    _make_btn(scr, "OFF",     540, BTN_Y, 220, 0x7B1414, _on_off)
+    BTN_W = 187
+    _connect_btn = _make_btn(scr, "ADD",     10,  BTN_Y, BTN_W, 0x0F3460, _on_connect)
+    _make_btn(scr, "ON",      207, BTN_Y, BTN_W, 0x1A6B3C, _on_on)
+    _make_btn(scr, "OFF",     404, BTN_Y, BTN_W, 0x7B1414, _on_off)
+    _make_btn(scr, "STATUS",  601, BTN_Y, BTN_W, 0x5A3E00, _on_status)
 
-    # ── log panel ─────────────────────────────────────────────────────────────
+    # ── device list panel (left) ──────────────────────────────────────────────
+    dev_panel = lv.obj(scr)
+    dev_panel.set_size(520, 345)
+    dev_panel.set_pos(0, 133)
+    dev_panel.set_style_bg_color(lv.color_hex(0x07070F), lv.PART.MAIN)
+    dev_panel.set_style_border_width(0, lv.PART.MAIN)
+    dev_panel.set_style_radius(0, lv.PART.MAIN)
+    dev_panel.set_style_pad_all(0, lv.PART.MAIN)
+    _no_scroll(dev_panel)
+    _device_list_obj = dev_panel
+
+    # ── log panel (right) ─────────────────────────────────────────────────────
     panel = lv.obj(scr)
-    panel.set_size(800, 340)
-    panel.set_pos(0, 140)
+    panel.set_size(278, 345)
+    panel.set_pos(522, 133)
     panel.set_style_bg_color(lv.color_hex(0x080810), lv.PART.MAIN)
     panel.set_style_border_width(0, lv.PART.MAIN)
     panel.set_style_radius(0, lv.PART.MAIN)
-    panel.set_style_pad_all(10, lv.PART.MAIN)
-    panel.remove_flag(lv.obj.FLAG.SCROLLABLE)
+    panel.set_style_pad_all(8, lv.PART.MAIN)
+    _no_scroll(panel)
 
     _log_lbl = lv.label(panel)
-    _log_lbl.set_width(778)
+    _log_lbl.set_width(260)
     _log_lbl.set_style_text_color(lv.color_hex(0x00E676), lv.PART.MAIN)
     _log_lbl.set_style_text_font(lv.font_montserrat_14, lv.PART.MAIN)
     _log_lbl.set_long_mode(lv.label.LONG_MODE.WRAP)
@@ -448,7 +647,7 @@ def build_ui():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    global _uart_inst
+    global _uart_inst, _devices, _dev_addr, _selected_ieee
 
     # I2C for touch + backlight expander (shared bus, same pins)
     i2c = I2C(0, sda=Pin(_TOUCH_SDA), scl=Pin(_TOUCH_SCL), freq=400_000)
@@ -461,8 +660,18 @@ def main():
     task_handler.TaskHandler()
 
     build_ui()
+
+    _devices = _load_devices()
+    if _devices:
+        _selected_ieee = list(_devices.keys())[0]
+        _dev_addr      = _devices[_selected_ieee]["short_addr"]
+        _log("Restored %d device(s)" % len(_devices))
+        _rebuild_device_list()
+        _update_connect_btn()
+    else:
+        _log("Ready — waiting for H2 boot …")
+
     _refresh_status()
-    _log("Ready — waiting for H2 boot …")
 
     # UART to H2 (timeout=0 → non-blocking reads in poll timer)
     _uart_inst = UART(UART_ID, baudrate=BAUD, tx=S3_TX_PIN, rx=S3_RX_PIN,
