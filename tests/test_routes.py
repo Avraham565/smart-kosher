@@ -36,7 +36,7 @@ def _build_client(gateway_responses=None):
         defaults={"city": "ירושלים", "lat": 31.7683, "lon": 35.2137,
                   "utc_offset_minutes": 120, "candle_offset": 18, "tzais_offset": 40},
     )
-    app = create_app(crud, control, settings)
+    app = create_app(crud, control, settings, repo)
     return TestClient(app), crud
 
 
@@ -590,6 +590,285 @@ class TestSettingsRoutes(AsyncCase):
                 "lat": 32.08, "lon": 34.78, "utc_offset_minutes": 120,
                 "candle_offset": 18, "tzais_offset": 40, "in_israel": True,
             })
+            self.assertEqual(200, res.status_code)
+        self._run(go())
+
+    def test_lat_out_of_range_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.put("/api/settings", body={"lat": 91})
+            self.assertEqual(400, res.status_code)
+            self.assertIn("lat", res.json["error"])
+        self._run(go())
+
+    def test_lon_out_of_range_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.put("/api/settings", body={"lon": -200.5})
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+    def test_utc_offset_out_of_range_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.put("/api/settings", body={"utc_offset_minutes": 900})
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+    def test_candle_offset_out_of_range_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.put("/api/settings", body={"candle_offset": -1})
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+
+# ── /api/settings/cities ──────────────────────────────────────────────────────
+
+class TestCitiesRoute(AsyncCase):
+
+    def test_lists_packaged_cities(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/settings/cities")
+            self.assertEqual(200, res.status_code)
+            cities = res.json["data"]
+            self.assertTrue(cities)
+            for city in cities:
+                self.assertIn("id", city)
+                self.assertIn("name_he", city)
+                self.assertIn("lat", city)
+                self.assertIn("lon", city)
+        self._run(go())
+
+
+# ── /api/status ───────────────────────────────────────────────────────────────
+
+class TestStatusRoute(AsyncCase):
+
+    def test_status_shape(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/status")
+            self.assertEqual(200, res.status_code)
+            data = res.json["data"]
+            self.assertIn("app_version", data)
+            self.assertRegex(data["device_time"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+            self.assertIsNone(data["settings_load_error"])
+            self.assertGreaterEqual(data["uptime_seconds"], 0)
+            self.assertFalse(data["clock_unset"])
+        self._run(go())
+
+
+# ── /api/today ────────────────────────────────────────────────────────────────
+
+class TestTodayRoute(AsyncCase):
+
+    def test_explicit_date(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/today?date=2026-07-03")
+            self.assertEqual(200, res.status_code)
+            data = res.json["data"]
+            self.assertEqual("2026-07-03", data["date"])
+            # 18 Tammuz 5786, a Friday
+            self.assertEqual({"year": 5786, "month": 4, "day": 18}, data["hebrew_date"])
+            self.assertEqual(6, data["day_of_week"])
+            self.assertFalse(data["is_shabbat"])
+            self.assertRegex(data["zmanim"]["shkia"], r"^\d{2}:\d{2}$")
+            self.assertRegex(data["zmanim"]["candle_lighting"], r"^\d{2}:\d{2}$")
+        self._run(go())
+
+    def test_shabbat_flag(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/today?date=2026-07-04")
+            self.assertTrue(res.json["data"]["is_shabbat"])
+        self._run(go())
+
+    def test_dst_offset_reflected(self):
+        async def go():
+            client, _ = _build_client()
+            july = (await client.get("/api/today?date=2026-07-03")).json["data"]
+            january = (await client.get("/api/today?date=2026-01-02")).json["data"]
+            self.assertEqual(180, july["utc_offset_minutes"])
+            self.assertEqual(120, january["utc_offset_minutes"])
+        self._run(go())
+
+    def test_no_date_returns_today(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/today")
+            self.assertEqual(200, res.status_code)
+            self.assertRegex(res.json["data"]["date"], r"^\d{4}-\d{2}-\d{2}$")
+        self._run(go())
+
+    def test_bad_date_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/today?date=not-a-date")
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+    def test_unset_clock_year_falls_back_to_fixed_offset(self):
+        # A fresh device RTC reads 2000; Israeli DST rules start at 2013.
+        # The view must not error — it falls back to the stored fixed offset.
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/today?date=2000-01-01")
+            self.assertEqual(200, res.status_code)
+            self.assertEqual(120, res.json["data"]["utc_offset_minutes"])
+        self._run(go())
+
+
+# ── /api/time ─────────────────────────────────────────────────────────────────
+
+class TestTimeRoute(AsyncCase):
+
+    def test_not_supported_on_cpython(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.post("/api/time", body={
+                "year": 2026, "month": 7, "day": 3,
+                "hour": 12, "minute": 0, "second": 0,
+            })
+            self.assertEqual(501, res.status_code)
+        self._run(go())
+
+    def test_missing_field_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.post("/api/time", body={"year": 2026})
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+    def test_invalid_date_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.post("/api/time", body={
+                "year": 2026, "month": 2, "day": 30,
+                "hour": 12, "minute": 0, "second": 0,
+            })
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+    def test_year_below_2013_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.post("/api/time", body={
+                "year": 2000, "month": 1, "day": 1,
+                "hour": 0, "minute": 0, "second": 0,
+            })
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+
+# ── /api/schedules/upcoming ───────────────────────────────────────────────────
+
+class TestUpcomingRoute(AsyncCase):
+
+    async def _client_with_daily_schedule(self):
+        client, _ = _build_client()
+        ep = (await client.post("/api/endpoints", body=_EP_BODY)).json["data"]
+        body = dict(_SCHEDULE_BODY)
+        body["target_id"] = ep["id"]
+        created = await client.post("/api/schedules", body=body)
+        assert created.status_code == 201
+        return client, created.json["data"]
+
+    def test_daily_schedule_appears(self):
+        async def go():
+            client, sch = await self._client_with_daily_schedule()
+            res = await client.get("/api/schedules/upcoming?days=3")
+            self.assertEqual(200, res.status_code)
+            events = res.json["data"]["events"]
+            self.assertTrue(events)
+            self.assertEqual(sch["id"], events[0]["schedule_id"])
+            self.assertRegex(events[0]["local_time"], r"^\d{2}:\d{2}$")
+            self.assertRegex(events[0]["local_date"], r"^\d{4}-\d{2}-\d{2}$")
+            self.assertGreater(events[0]["in_minutes"], 0)
+        self._run(go())
+
+    def test_disabled_schedule_excluded(self):
+        async def go():
+            client, sch = await self._client_with_daily_schedule()
+            await client.patch(
+                f"/api/schedules/{sch['id']}/enabled", body={"enabled": False}
+            )
+            res = await client.get("/api/schedules/upcoming?days=3")
+            self.assertEqual([], res.json["data"]["events"])
+        self._run(go())
+
+    def test_days_out_of_range_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/schedules/upcoming?days=30")
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+    def test_days_not_integer_returns_400(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/schedules/upcoming?days=abc")
+            self.assertEqual(400, res.status_code)
+        self._run(go())
+
+
+# ── Referential integrity on delete ───────────────────────────────────────────
+
+class TestDeleteConflicts(AsyncCase):
+
+    def test_delete_zone_with_endpoint_returns_409(self):
+        async def go():
+            client, _ = _build_client()
+            zone = (await client.post("/api/zones", body=_ZONE_BODY)).json["data"]
+            await client.post(
+                "/api/endpoints", body={"name": "אור", "zone_id": zone["id"]}
+            )
+            res = await client.delete(f"/api/zones/{zone['id']}")
+            self.assertEqual(409, res.status_code)
+            self.assertIn("אור", res.json["error"])
+        self._run(go())
+
+    def test_delete_endpoint_in_group_returns_409(self):
+        async def go():
+            client, _ = _build_client()
+            ep = (await client.post("/api/endpoints", body=_EP_BODY)).json["data"]
+            await client.post(
+                "/api/groups", body={"name": "קבוצה", "member_ids": [ep["id"]]}
+            )
+            res = await client.delete(f"/api/endpoints/{ep['id']}")
+            self.assertEqual(409, res.status_code)
+        self._run(go())
+
+    def test_delete_endpoint_with_schedule_returns_409(self):
+        async def go():
+            client, _ = _build_client()
+            ep = (await client.post("/api/endpoints", body=_EP_BODY)).json["data"]
+            body = dict(_SCHEDULE_BODY)
+            body["target_id"] = ep["id"]
+            await client.post("/api/schedules", body=body)
+            res = await client.delete(f"/api/endpoints/{ep['id']}")
+            self.assertEqual(409, res.status_code)
+        self._run(go())
+
+    def test_delete_group_with_schedule_returns_409(self):
+        async def go():
+            client, _ = _build_client()
+            grp = (await client.post("/api/groups", body=_GROUP_BODY)).json["data"]
+            body = dict(_SCHEDULE_BODY)
+            body["target_type"] = "group"
+            body["target_id"] = grp["id"]
+            await client.post("/api/schedules", body=body)
+            res = await client.delete(f"/api/groups/{grp['id']}")
+            self.assertEqual(409, res.status_code)
+        self._run(go())
+
+    def test_delete_unreferenced_endpoint_succeeds(self):
+        async def go():
+            client, _ = _build_client()
+            ep = (await client.post("/api/endpoints", body=_EP_BODY)).json["data"]
+            res = await client.delete(f"/api/endpoints/{ep['id']}")
             self.assertEqual(200, res.status_code)
         self._run(go())
 

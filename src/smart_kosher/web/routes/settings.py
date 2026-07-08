@@ -2,24 +2,38 @@
 
 import time
 
+from ...data import load_cities
 from ..responses import ok, err
 from . import require_json_body
 
 _ALLOWED_KEYS = {"city", "lat", "lon", "utc_offset_minutes", "in_israel",
                  "candle_offset", "tzais_offset"}
-_NUMERIC_KEYS = {"lat", "lon", "candle_offset", "tzais_offset"}
 
 
-def _type_error(key, value):
+def _is_number(value):
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
+def _is_int(value):
+    return not isinstance(value, bool) and isinstance(value, int)
+
+
+def _value_error(key, value):
     if key == "city":
         if not isinstance(value, str) or not value.strip():
             return "city must be a non-empty string"
-    elif key in _NUMERIC_KEYS:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return "{} must be a number".format(key)
+    elif key == "lat":
+        if not _is_number(value) or not -90 <= value <= 90:
+            return "lat must be a number in -90..90"
+    elif key == "lon":
+        if not _is_number(value) or not -180 <= value <= 180:
+            return "lon must be a number in -180..180"
     elif key == "utc_offset_minutes":
-        if not isinstance(value, int) or isinstance(value, bool):
-            return "utc_offset_minutes must be an integer"
+        if not _is_int(value) or not -840 <= value <= 840:
+            return "utc_offset_minutes must be an integer in -840..840"
+    elif key in ("candle_offset", "tzais_offset"):
+        if not _is_int(value) or not 0 <= value <= 1440:
+            return "{} must be an integer in 0..1440".format(key)
     elif key == "in_israel":
         if not isinstance(value, bool):
             return "in_israel must be a boolean"
@@ -46,8 +60,18 @@ def register(app, settings_store):
         if unknown:
             return err("unknown settings keys: {}".format(", ".join(sorted(unknown))))
         for key, value in body.items():
-            msg = _type_error(key, value)
+            msg = _value_error(key, value)
             if msg:
                 return err(msg)
         settings_store.update(body)
         return ok(settings_store.get())
+
+    @app.get("/api/settings/cities")
+    async def list_cities(req):
+        cities = []
+        for city_id, city in load_cities().items():
+            entry = {"id": city_id}
+            entry.update(city)
+            cities.append(entry)
+        cities.sort(key=lambda c: c["name_he"])
+        return ok(cities)

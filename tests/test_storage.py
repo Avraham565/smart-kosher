@@ -196,5 +196,61 @@ class JsonRepositoryTests(unittest.TestCase):
         self.assertTrue(reloaded.was_executed("event-2"))
 
 
+class SettingsStoreTests(unittest.TestCase):
+    base = os.path.join("tests", ".tmp-settings")
+
+    def setUp(self):
+        if os.path.exists(self.base):
+            shutil.rmtree(self.base)
+        os.makedirs(self.base)
+        self.path = os.path.join(self.base, "settings.json")
+
+    def tearDown(self):
+        if os.path.exists(self.base):
+            shutil.rmtree(self.base)
+
+    def _store(self, defaults=None):
+        from smart_kosher.web.settings_store import SettingsStore
+        return SettingsStore(self.path, defaults=defaults)
+
+    def test_defaults_when_no_file(self):
+        store = self._store({"city": "ירושלים"})
+        self.assertEqual("ירושלים", store.get()["city"])
+        self.assertIsNone(store.load_error)
+
+    def test_update_persists_and_keeps_backup(self):
+        store = self._store({"city": "ירושלים"})
+        store.update({"lat": 32.0})
+        store.update({"lon": 34.0})
+        self.assertTrue(os.path.exists(self.path))
+        self.assertTrue(os.path.exists(self.path + ".bak"))
+        reloaded = self._store()
+        self.assertEqual(32.0, reloaded.get()["lat"])
+        self.assertEqual(34.0, reloaded.get()["lon"])
+
+    def test_corrupt_primary_recovers_from_backup(self):
+        store = self._store()
+        store.update({"city": "צפת"})
+        store.update({"city": "חיפה"})  # primary=חיפה, backup=צפת
+        with open(self.path, "w") as handle:
+            handle.write("{corrupt")
+        recovered = self._store()
+        self.assertEqual("צפת", recovered.get()["city"])
+        self.assertIsNone(recovered.load_error)
+
+    def test_all_corrupt_reports_load_error(self):
+        with open(self.path, "w") as handle:
+            handle.write("{corrupt")
+        store = self._store({"city": "ירושלים"})
+        self.assertEqual("ירושלים", store.get()["city"])
+        self.assertIsNotNone(store.load_error)
+
+    def test_non_dict_content_reports_load_error(self):
+        with open(self.path, "w") as handle:
+            handle.write(json.dumps([1, 2, 3]))
+        store = self._store()
+        self.assertIsNotNone(store.load_error)
+
+
 if __name__ == "__main__":
     unittest.main()

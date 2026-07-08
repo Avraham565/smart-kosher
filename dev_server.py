@@ -1,4 +1,4 @@
-"""Development server — runs the web UI locally on http://localhost:5000
+"""Development server — runs the JSON API locally on http://localhost:5004
 
 Usage:
     $env:PYTHONPATH = "src"
@@ -20,7 +20,6 @@ from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.executor import Executor
 from smart_kosher.web.server import create_app
 from smart_kosher.web.settings_store import SettingsStore
-from smart_kosher.web.wifi_ap import start as start_ap
 
 # ── Storage mode ──────────────────────────────────────────────────────────────
 # "memory" → in-memory only (resets on restart, good for quick UI testing)
@@ -56,15 +55,18 @@ def main():
         },
     )
 
-    ap_info = start_ap()
-    print("WiFi AP:", ap_info)
+    def status_info():
+        return {
+            "gateway": "simulator",
+            "storage": STORAGE,
+            "commands_sent": len(gateway.commands),
+        }
 
-    app = create_app(crud, control, settings)
+    app = create_app(crud, control, settings, repo, status_info)
 
     print()
     print("  Smart Kosher dev server")
     print("  -----------------------")
-    print("  UI:  http://localhost:5004")
     print("  API: http://localhost:5004/api/zones")
     print("       http://localhost:5004/api/endpoints")
     print("       http://localhost:5004/api/groups")

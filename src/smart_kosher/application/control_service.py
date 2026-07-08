@@ -4,6 +4,7 @@ import binascii
 import os
 import time
 
+from ..zmanim import gregorian_day_number
 from .crud_service import NotFoundError
 
 _TARGET_TO_COLLECTION = {
@@ -36,7 +37,10 @@ def _build_event(target_type, target_id, action_type):
         "event_id": "ctrl_{}".format(binascii.hexlify(os.urandom(4)).decode()),
         "schedule_id": "manual",
         "source_date": (now[0], now[1], now[2]),
-        "utc_minute": now[3] * 60 + now[4],
+        "utc_minute": (
+            gregorian_day_number(now[0], now[1], now[2]) * 1440
+            + now[3] * 60 + now[4]
+        ),
         "target_type": target_type,
         "target_id": target_id,
         "action_type": action_type,

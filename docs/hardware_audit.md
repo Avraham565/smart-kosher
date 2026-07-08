@@ -102,11 +102,6 @@ moves from experiments into the product:
 - `src/smart_kosher/domain/devices.py`: keep the generic endpoint/group model,
   but do not require or trust `ieee_address`/`zigbee_endpoint` until hardware
   discovery proves the final identifiers.
-- `src/smart_kosher/web/static/app.js`: useful for UI iteration, but endpoint
-  forms still expose planned Zigbee fields. Replace those with discovered
-  device data when the H2 reports multiple devices.
-- `src/smart_kosher/web/wifi_ap.py`: reasonable embedded stub, but not yet
-  tested on the final firmware image.
 - `data-sheets/`: keep as local reference material. The tracked PDFs are large;
   if Markdown extracts are enough, remove PDFs in a separate repository hygiene
   pass.
