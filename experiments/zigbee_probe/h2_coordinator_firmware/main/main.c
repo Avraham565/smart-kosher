@@ -4,7 +4,20 @@
  *
  * H2 is a pure execution arm — no device state, no table.
  * S3 owns the device registry and supplies all addressing per command.
- * Only per-request state: s_pending_rid/short for async read_attr.
+ * Per-request state: s_pending_rid/short (read_attr), s_bind_pending_short/ep
+ * (enable_reporting bind+configure chain).
+ *
+ * Gate 3 addition: enable_reporting — binds a joined device's OnOff cluster
+ * to this coordinator and configures ZCL attribute reporting, so physical
+ * switch presses on the device itself push an unsolicited attribute_report
+ * event instead of requiring S3 to poll read_attr.
+ *
+ * NOTE: EZB_ZCL_CORE_REPORT_ATTR_CB_ID and ezb_zcl_report_attr_message_t
+ * field names are inferred by pattern-match against EZB_ZCL_CORE_READ_ATTR_RSP_CB_ID
+ * (already proven below) and the underlying esp_zb_core_action_callback_id_t
+ * enum (docs.espressif.com/projects/esp-zigbee-sdk) — not yet confirmed
+ * against the actual vendored header. First build on real hardware is the
+ * verification step; fix names here if the compiler disagrees.
  */
 
 #include <inttypes.h>
@@ -32,8 +45,9 @@
 
 #define TAG        "H2_COORD"
 #define FW_NAME    "smart_kosher_h2_coordinator"
-#define FW_VERSION "0.5.0"
+#define FW_VERSION "0.6.0"
 #define COORD_EP   1
+#define REPORT_MAX_INTERVAL_S 3600
 
 #define UART_PORT   ((uart_port_t)CONFIG_COORD_UART_PORT)
 #define RX_BUF_SIZE 1024
@@ -47,6 +61,8 @@
 static bool              s_net_up        = false;
 static char              s_pending_rid[48];
 static uint16_t          s_pending_short = 0xFFFF;
+static uint16_t          s_bind_pending_short = 0xFFFF;
+static uint8_t           s_bind_pending_ep    = 0;
 static SemaphoreHandle_t s_uart_mutex;
 
 /* ── IEEE address helpers ───────────────────────────────────────── */
@@ -157,6 +173,36 @@ static void zcl_action_handler(ezb_zcl_core_action_callback_id_t cb_id,
     } else if (cb_id == EZB_ZCL_CORE_DEFAULT_RSP_CB_ID) {
         ezb_zcl_cmd_default_rsp_message_t *dr = message;
         ESP_LOGD(TAG, "zcl default_rsp status=0x%02x", dr->in.status_code);
+    } else if (cb_id == EZB_ZCL_CORE_REPORT_ATTR_CB_ID) {
+        /* Unsolicited attribute report — e.g. physical switch press on the
+         * device itself, pushed to us because of enable_reporting's bind +
+         * configure_reporting. Struct confirmed against the vendored header
+         * (ezbee/zcl/zcl_general_cmd.h) on first build — same shape as the
+         * READ_ATTR_RSP handler above (info + in.variables linked list). */
+        ezb_zcl_cmd_report_attr_message_t *rpt = message;
+        if (rpt->info.cluster_id == EZB_ZCL_CLUSTER_ID_ON_OFF) {
+            ezb_zcl_report_attr_variable_t *var = rpt->in.variables;
+            while (var) {
+                if (var->attr_id == 0x0000 /* OnOff */ && var->attr_value) {
+                    uint8_t raw = *(uint8_t *)var->attr_value;
+                    uint16_t src_short = 0xFFFF;
+                    uint8_t  src_ep    = 0;
+                    if (rpt->in.header) {
+                        src_short = rpt->in.header->src_addr.u.short_addr;
+                        src_ep    = rpt->in.header->src_ep;
+                    }
+                    char short_s[8];
+                    snprintf(short_s, sizeof(short_s), "0x%04x", src_short);
+                    cJSON *p = cJSON_CreateObject();
+                    cJSON_AddStringToObject(p, "short_addr", short_s);
+                    cJSON_AddNumberToObject(p, "endpoint",   src_ep);
+                    cJSON_AddBoolToObject(p,   "on_off",     raw != 0);
+                    send_event("attribute_report", p);
+                    break;
+                }
+                var = var->next;
+            }
+        }
     }
 }
 
@@ -368,6 +414,110 @@ static void cmd_read_attr(const char *rid, cJSON *payload)
     /* async response arrives via zcl_action_handler */
 }
 
+static void bind_result_cb(const ezb_zdp_bind_req_result_t *result, void *user_ctx)
+{
+    uint16_t target = s_bind_pending_short;
+    uint8_t  ep      = s_bind_pending_ep;
+    char short_s[8];
+    snprintf(short_s, sizeof(short_s), "0x%04x", target);
+
+    bool ok = result && result->error == EZB_ERR_NONE &&
+              result->rsp && result->rsp->status == EZB_ZDP_STATUS_SUCCESS;
+    if (!ok) {
+        cJSON *p = cJSON_CreateObject();
+        cJSON_AddStringToObject(p, "short_addr", short_s);
+        cJSON_AddNumberToObject(p, "endpoint",   ep);
+        cJSON_AddStringToObject(p, "reason",     "bind_failed");
+        send_event("reporting_failed", p);
+        return;
+    }
+
+    /* Device's own OnOff attribute is a boolean — report immediately on any
+     * change (min_interval=0) plus a periodic heartbeat (max_interval). */
+    ezb_zcl_config_report_record_t record = {
+        .direction = EZB_ZCL_REPORTING_SEND,
+        .attr_id   = 0x0000, /* OnOff */
+        .client    = {
+            .attr_type    = EZB_ZCL_ATTR_TYPE_BOOL,
+            .min_interval = 0,
+            .max_interval = REPORT_MAX_INTERVAL_S,
+        },
+    };
+    ezb_zcl_config_report_cmd_t req = {
+        .cmd_ctrl = {
+            .dst_addr.addr_mode    = EZB_ADDR_MODE_SHORT,
+            .dst_addr.u.short_addr = target,
+            .dst_ep                = ep,
+            .src_ep                = COORD_EP,
+            .cluster_id            = EZB_ZCL_CLUSTER_ID_ON_OFF,
+        },
+        .payload = {
+            .record_number = 1,
+            .record_field  = &record,
+        },
+    };
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    ezb_err_t rc = ezb_zcl_config_report_cmd_req(&req);
+    esp_zigbee_lock_release();
+
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "short_addr", short_s);
+    cJSON_AddNumberToObject(p, "endpoint",   ep);
+    cJSON_AddStringToObject(p, "status",     rc == EZB_ERR_NONE ? "ok" : "error");
+    send_event("reporting_configured", p);
+}
+
+static void cmd_enable_reporting(const char *rid, cJSON *payload)
+{
+    if (!payload) { send_error(rid, "missing_payload", NULL); return; }
+
+    cJSON *a = cJSON_GetObjectItemCaseSensitive(payload, "short_addr");
+    if (!cJSON_IsString(a)) { send_error(rid, "missing_addr", NULL); return; }
+
+    unsigned long v = strtoul(a->valuestring, NULL, 16);
+    if (v == 0 || v >= 0xFFFF) { send_error(rid, "bad_addr", NULL); return; }
+    uint16_t target = (uint16_t)v;
+
+    uint8_t ep = 1;
+    cJSON *e = cJSON_GetObjectItemCaseSensitive(payload, "endpoint");
+    if (cJSON_IsNumber(e)) ep = (uint8_t)e->valueint;
+
+    s_bind_pending_short = target;
+    s_bind_pending_ep    = ep;
+
+    /* Bind is configured ON the target device: "when your own OnOff (src_ep)
+     * changes, tell dst_addr (us)." dst_nwk_addr is who we SEND the ZDO Bind
+     * Request to — the target device itself, not us. */
+    ezb_zdo_bind_req_t bind_req = {
+        .dst_nwk_addr = target,
+        .field = {
+            .src_ep        = ep,
+            .cluster_id    = EZB_ZCL_CLUSTER_ID_ON_OFF,
+            .dst_addr_mode = EZB_ADDR_MODE_EXT,
+            .dst_ep        = COORD_EP,
+        },
+        .cb       = bind_result_cb,
+        .user_ctx = NULL,
+    };
+    if (ezb_address_extended_by_short(target, &bind_req.field.src_addr) != EZB_ERR_NONE) {
+        send_error(rid, "unknown_device", NULL);
+        return;
+    }
+    ezb_nwk_get_extended_address(&bind_req.field.dst_addr.extended_addr);
+
+    esp_zigbee_lock_acquire(portMAX_DELAY);
+    ezb_err_t rc = ezb_zdo_bind_req(&bind_req);
+    esp_zigbee_lock_release();
+    if (rc != EZB_ERR_NONE) { send_error(rid, "bind_failed", NULL); return; }
+
+    cJSON *p = cJSON_CreateObject();
+    cJSON_AddStringToObject(p, "short_addr", a->valuestring);
+    cJSON_AddNumberToObject(p, "endpoint",   ep);
+    send_ack(rid, "enable_reporting", "ok", p);
+    /* reporting_configured / reporting_failed event follows asynchronously
+     * from bind_result_cb once the bind response arrives. */
+}
+
 static void cmd_remove_device(const char *rid, cJSON *payload)
 {
     if (!payload) { send_error(rid, "missing_payload", NULL); return; }
@@ -439,8 +589,9 @@ static void handle_frame(char *line)
     else if (strcmp(op, "ping")          == 0)   cmd_ping(rid);
     else if (strcmp(op, "permit_join")   == 0)   cmd_permit_join(rid, pl);
     else if (strcmp(op, "on_off")        == 0)   cmd_on_off(rid, pl);
-    else if (strcmp(op, "read_attr")     == 0)   cmd_read_attr(rid, pl);
-    else if (strcmp(op, "remove_device") == 0)   cmd_remove_device(rid, pl);
+    else if (strcmp(op, "read_attr")        == 0)   cmd_read_attr(rid, pl);
+    else if (strcmp(op, "enable_reporting") == 0)   cmd_enable_reporting(rid, pl);
+    else if (strcmp(op, "remove_device")    == 0)   cmd_remove_device(rid, pl);
     else                                         send_error(rid, "unknown_op", op);
 
     cJSON_Delete(root);

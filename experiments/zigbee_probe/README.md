@@ -34,6 +34,9 @@ S3 commands currently sent by the probes:
 - `permit_join` with `payload.duration`
 - `on_off` with `payload.state` set to `on` or `off`
 - `read_attr`
+- `enable_reporting` with `payload.short_addr` and `payload.endpoint` — binds
+  the device's OnOff cluster to this coordinator and configures ZCL
+  attribute reporting (Gate 3, untested on hardware as of 0.6.0)
 
 H2 messages currently emitted:
 
@@ -41,10 +44,18 @@ H2 messages currently emitted:
 - `event` / `network_formed`
 - `event` / `device_joined`
 - `event` / `permit_join_status`
+- `event` / `reporting_configured` — async result of `enable_reporting`,
+  after bind succeeds and config_report is sent
+- `event` / `reporting_failed` — async result of `enable_reporting` if bind
+  fails
+- `event` / `attribute_report` — unsolicited push when the device's OnOff
+  state changes (e.g. physical switch press), once reporting is configured
 - `ack` / `ping`
 - `ack` / `permit_join`
 - `ack` / `on_off`
 - `ack` / `read_attr`
+- `ack` / `enable_reporting` — only confirms the bind request was issued,
+  not that reporting is active yet; wait for `reporting_configured`
 - `error` with an error code in `payload.code`
 
 ## Pieces

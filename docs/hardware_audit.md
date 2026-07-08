@@ -22,6 +22,11 @@ Proven there:
 - One real Zigbee device can join.
 - S3 can send `on_off` commands through H2.
 - S3 can send `read_attr` and verify the OnOff attribute.
+- **Gate 3 (2026-07-01):** `enable_reporting` — S3 can bind a joined device's
+  OnOff cluster to the coordinator and configure ZCL attribute reporting.
+  Confirmed end-to-end on real hardware: physically flipping the Sonoff's
+  wired wall switch pushed a spontaneous `attribute_report` event to S3 with
+  no polling required. Firmware `smart_kosher_h2_coordinator` 0.6.0.
 
 Known current hardware limits:
 
