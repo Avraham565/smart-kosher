@@ -10,6 +10,17 @@ python client/app.py
 Requires `pyserial` (always) and `pywebview` (for the native window;
 without it the UI opens in the default browser).
 
+## Building the exe
+
+```
+powershell -ExecutionPolicy Bypass -File client\build.ps1
+```
+
+Produces `client\dist\SmartKosher.exe` (one file, no console; needs the
+repo venv with `pyinstaller` installed). Flags useful for testing:
+`SmartKosher.exe --port 18765 --no-window` runs the bridge headless on a
+fixed port.
+
 ## How it works
 
 - `bridge.py` — device links. `SerialLink` speaks the hub's op protocol

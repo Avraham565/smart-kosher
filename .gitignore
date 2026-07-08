@@ -8,6 +8,7 @@ __pycache__/
 htmlcov/
 dist/
 build/
+*.spec
 
 # Local Python environments
 .venv/

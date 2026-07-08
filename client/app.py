@@ -4,7 +4,14 @@ Starts the local bridge server and opens the UI in a native window
 (pywebview / Edge WebView2). Without pywebview installed it falls back
 to the default browser.
 
-Usage:  python client/app.py
+Usage:
+    python client/app.py [--port N] [--no-window]
+
+--port N      bind the bridge to a fixed port (default: any free port)
+--no-window   run the bridge headless (no window/browser) — for testing
+
+Also runs frozen (PyInstaller): the ui/ directory is bundled and
+resolved via sys._MEIPASS.
 """
 
 import os
@@ -15,10 +22,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge import LinkError
 from server import Manager, serve
 
-UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
+
+def _ui_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.join(sys._MEIPASS, "ui")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
+
+
+def _parse_args(argv):
+    port = 0
+    headless = False
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--no-window":
+            headless = True
+        elif argv[i] == "--port" and i + 1 < len(argv):
+            port = int(argv[i + 1])
+            i += 1
+        i += 1
+    return port, headless
+
+
+def _wait_forever():
+    import time
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
 
 
 def main():
+    port_arg, headless = _parse_args(sys.argv[1:])
+
     manager = Manager()
     try:
         info = manager.connect_serial()
@@ -26,9 +62,14 @@ def main():
     except LinkError:
         print("no USB device found - connect via the app's connection tab")
 
-    httpd, port = serve(manager, UI_DIR)
+    httpd, port = serve(manager, _ui_dir(), port=port_arg)
     url = "http://127.0.0.1:{}/".format(port)
     print("bridge running at", url)
+
+    if headless:
+        _wait_forever()
+        httpd.shutdown()
+        return
 
     try:
         import webview
@@ -36,7 +77,7 @@ def main():
         webview = None
 
     if webview is not None:
-        window = webview.create_window(
+        webview.create_window(
             "Smart Kosher", url, width=520, height=840, min_size=(400, 600))
         webview.start()
     else:
@@ -45,12 +86,7 @@ def main():
         print("pywebview not installed - opened in the browser instead.")
         print("(pip install pywebview for a native window)")
         print("Press Ctrl+C to quit.")
-        try:
-            import time
-            while True:
-                time.sleep(3600)
-        except KeyboardInterrupt:
-            pass
+        _wait_forever()
 
     httpd.shutdown()
 

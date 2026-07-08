@@ -110,7 +110,14 @@ class SerialLink:
 
     def __init__(self, port, baud=115200, read_timeout=1.0):
         try:
-            self._serial = serial.Serial(port, baud, timeout=read_timeout)
+            # Deassert DTR/RTS *before* opening: the default assertion pulse
+            # resets the ESP32-S3 over USB-Serial/JTAG, rebooting the hub
+            # every time the app connects.
+            self._serial = serial.Serial(None, baud, timeout=read_timeout)
+            self._serial.port = port
+            self._serial.dtr = False
+            self._serial.rts = False
+            self._serial.open()
         except (serial.SerialException, OSError) as exc:
             raise LinkError("cannot open {}: {}".format(port, exc))
         self.port = port
