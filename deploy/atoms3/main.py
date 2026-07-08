@@ -3,9 +3,14 @@
 Deployed to the device root as /main.py (see deploy.ps1). Runs under
 MicroPython v1.24.1.
 
-The hub is API-only: it joins the home network as a station (credentials
-in /data/wifi.json, written by the provisioning tool over USB serial) and
-serves the JSON API. There is no AP mode and no on-device UI.
+The hub is API-only and serves two channels off one Api dispatcher:
+  - HTTP (Microdot) on the home network — STA credentials come from
+    /data/wifi.json
+  - line-delimited JSON over the USB CDC — always available, including
+    wifi.provision / wifi.status / system.reboot device ops, so a hub
+    with no (or wrong) WiFi credentials can always be recovered
+
+There is no AP mode and no on-device UI.
 
 Storage layout on the device:
     /lib/microdot/       Microdot (only __init__.py + microdot.py)
@@ -13,20 +18,30 @@ Storage layout on the device:
     /data/               JSON entities + settings + wifi.json + journal.log
 """
 
+import asyncio
 import gc
 import json
 import time
 
+from smart_kosher import serial_channel
 from smart_kosher.adapters import H2Simulator, MachineRtcClock, SettingsStore
 from smart_kosher.adapters.json_repository import JsonEventJournal, JsonRepository
+from smart_kosher.application.api import Api, ApiError, BAD_REQUEST
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
+from smart_kosher.application.device_time import DeviceTimeService
 from smart_kosher.application.executor import Executor
+from smart_kosher.application.views import ViewService
 from smart_kosher.web.server import create_app
 
 DATA_DIR = "/data"
 WIFI_CONFIG = DATA_DIR + "/wifi.json"
 WIFI_CONNECT_TIMEOUT_S = 20
+
+# AtomS3 Lite has no PSRAM (~250KB usable heap). The journal keeps every
+# record as Python objects in RAM, so keep it small; 64 records still cover
+# a two-day catch-up horizon at pilot scale.
+JOURNAL_MAX_RECORDS = 64
 
 
 def connect_wifi():
@@ -57,10 +72,53 @@ def connect_wifi():
             time.sleep_ms(200)
     return sta.ifconfig()[0]
 
-# AtomS3 Lite has no PSRAM (~250KB usable heap). The journal keeps every
-# record as Python objects in RAM, so keep it small; 64 records still cover
-# a two-day catch-up horizon at pilot scale.
-JOURNAL_MAX_RECORDS = 64
+
+def device_ops():
+    """Device-only serial ops: WiFi provisioning and reboot."""
+
+    def wifi_provision(params):
+        ssid = params.get("ssid")
+        password = params.get("password")
+        if not isinstance(ssid, str) or not ssid.strip():
+            raise ApiError(BAD_REQUEST, "ssid must be a non-empty string")
+        if not isinstance(password, str) or len(password) < 8:
+            raise ApiError(BAD_REQUEST,
+                           "password must be at least 8 characters (WPA2)")
+        with open(WIFI_CONFIG, "w") as f:
+            json.dump({"ssid": ssid, "password": password}, f)
+        return {"ssid": ssid, "saved": True,
+                "note": "send system.reboot to apply"}
+
+    def wifi_status(params):
+        import network
+        sta = network.WLAN(network.STA_IF)
+        connected = sta.active() and sta.isconnected()
+        info = {"connected": connected}
+        try:
+            import os
+            os.stat(WIFI_CONFIG)
+            info["config_present"] = True
+        except OSError:
+            info["config_present"] = False
+        if connected:
+            info["ip"] = sta.ifconfig()[0]
+        return info
+
+    def system_reboot(params):
+        # Reset after a short delay so the response line reaches the client
+        # before USB drops.
+        async def _reset_soon():
+            await asyncio.sleep(1)
+            import machine
+            machine.reset()
+        asyncio.create_task(_reset_soon())
+        return {"rebooting": True}
+
+    return {
+        "wifi.provision": wifi_provision,
+        "wifi.status": wifi_status,
+        "system.reboot": system_reboot,
+    }
 
 
 def main():
@@ -88,8 +146,13 @@ def main():
     def status_info():
         return {"gateway": "simulator", "storage": "json"}
 
-    app = create_app(crud, control, settings, repo, status_info,
-                     clock=MachineRtcClock())
+    api = Api(
+        crud, control, settings,
+        views=ViewService(repo),
+        device_time=DeviceTimeService(MachineRtcClock()),
+        status_info=status_info,
+    )
+    app = create_app(crud, control, settings, api=api)
 
     gc.collect()
     # Collect early and often instead of waiting for the heap to fill —
@@ -101,9 +164,14 @@ def main():
         print("Smart Kosher hub API: http://{}/api/status".format(ip))
     print("free heap after boot:", gc.mem_free())
 
-    # debug=True logs every request line to the serial console — kept on
-    # while we chase the page-load failure; costs almost nothing.
-    app.run(host="0.0.0.0", port=80, debug=True)
+    # No debug=True: HTTP request logging would interleave with the serial
+    # channel's JSON lines on the shared USB CDC.
+    async def run():
+        server = asyncio.create_task(app.start_server(host="0.0.0.0", port=80))
+        print("serial channel ready")
+        await serial_channel.serve(api, device_ops())
+
+    asyncio.run(run())
 
 
 try:
