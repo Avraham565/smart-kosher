@@ -137,8 +137,13 @@ class ViewService:
     duplicated per channel.
     """
 
-    def __init__(self, repository):
-        self._repository = repository
+    def __init__(self, repository=None, clock=None):
+        # Public: channels/ops check it to tell whether repository-backed
+        # views (upcoming_events) are available.
+        self.repository = repository
+        # Injectable UTC source (a ports.clock.Clock); defaults to the
+        # system/RTC clock. Tests inject a fake to pin "now".
+        self._clock = clock
         # PlannerConfig runs a full sanity zmanim computation on construction
         # (~420 trig calls — heavy on the ESP32's software floats), and
         # Planner keeps a per-day zmanim cache that is valuable across
@@ -154,13 +159,16 @@ class ViewService:
     def _planner_for(self, settings):
         key = settings_key(settings)
         if self._planner is None or self._planner_key != key:
-            self._planner = Planner(planner_config(settings), self._repository)
+            self._planner = Planner(planner_config(settings), self.repository)
             self._planner_key = key
         return self._planner
 
+    def _now_utc(self):
+        return now_utc() if self._clock is None else self._clock.now_utc()
+
     def local_today(self, settings):
         """Today's Gregorian date in the hub's configured local time."""
-        now = time.gmtime()
+        now = self._now_utc()
         offset = offset_for_date(settings, now[0], now[1], now[2])
         total = now[3] * 60 + now[4] + offset
         if total >= 1440:
@@ -184,7 +192,7 @@ class ViewService:
         ``local_date`` ("YYYY-MM-DD") and ``local_time`` ("HH:MM") for
         direct display.
         """
-        start = now_utc()
+        start = self._now_utc()
         planner = self._planner_for(settings)
 
         end_date = add_gregorian_days(start[0], start[1], start[2], days)
