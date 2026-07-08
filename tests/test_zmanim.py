@@ -76,6 +76,31 @@ class ZmanimTests(unittest.TestCase):
         self.assertEqual(("vayikra",), parasha(2024, 3, 20, in_israel=True))
         self.assertEqual(("devarim",), parasha(2024, 8, 9, in_israel=True))
 
+    def test_israel_diaspora_parasha_divergence_5786(self):
+        # שבועות ה׳תשפ״ו: יו"ט שני של גלויות חל בשבת (2026-05-23) — בישראל
+        # קראו "נשא" ובחו"ל את קריאת החג, ומכאן חו"ל מפגר בפרשה אחת עד
+        # שמאחדים חוקת-בלק. שני הלוחות חייבים לחיות זה לצד זה באותו מנוע.
+        divergent_weeks = [
+            ((2026, 5, 30), ("behaalosecha",), ("naso",)),
+            ((2026, 6, 6),  ("shelach",),      ("behaalosecha",)),
+            ((2026, 6, 13), ("korach",),       ("shelach",)),
+            ((2026, 6, 20), ("chukas",),       ("korach",)),
+            # שבת ההשלמה: בישראל בלק לבד, בחו"ל חוקת-בלק מאוחדות
+            ((2026, 6, 27), ("balak",),        ("chukas", "balak")),
+        ]
+        for (y, m, d), israel, diaspora in divergent_weeks:
+            self.assertEqual(israel, parasha(y, m, d, in_israel=True),
+                             "IL {}-{}-{}".format(y, m, d))
+            self.assertEqual(diaspora, parasha(y, m, d, in_israel=False),
+                             "Diaspora {}-{}-{}".format(y, m, d))
+
+        # אחרי האיחוד הלוחות מסונכרנים שוב
+        for y, m, d in ((2026, 7, 4), (2026, 7, 11)):
+            self.assertEqual(parasha(y, m, d, in_israel=True),
+                             parasha(y, m, d, in_israel=False),
+                             "resync {}-{}-{}".format(y, m, d))
+        self.assertEqual(("matos", "masei"), parasha(2026, 7, 11, in_israel=True))
+
     def test_invalid_dates_and_locations_are_rejected(self):
         with self.assertRaises(ValueError):
             gregorian_to_jewish(2026, 2, 31)
