@@ -138,5 +138,48 @@ class RecoveryTests(unittest.TestCase):
                 shutil.rmtree(base)
 
 
+class FakeSettableClock:
+    def __init__(self):
+        self.set_calls = []
+
+    def set_utc(self, year, month, day, hour, minute, second):
+        self.set_calls.append((year, month, day, hour, minute, second))
+
+
+class DeviceTimeServiceTests(unittest.TestCase):
+    def _service(self, clock=None):
+        from smart_kosher.application.device_time import DeviceTimeService
+        return DeviceTimeService(clock)
+
+    def _fields(self, **overrides):
+        fields = {"year": 2026, "month": 7, "day": 8,
+                  "hour": 16, "minute": 30, "second": 0}
+        fields.update(overrides)
+        return fields
+
+    def test_sets_clock_and_returns_formatted_time(self):
+        clock = FakeSettableClock()
+        result = self._service(clock).set_time(self._fields())
+        self.assertEqual([(2026, 7, 8, 16, 30, 0)], clock.set_calls)
+        self.assertEqual("2026-07-08 16:30:00", result)
+
+    def test_no_clock_raises_unsupported(self):
+        from smart_kosher.application.device_time import ClockUnsupportedError
+        with self.assertRaises(ClockUnsupportedError):
+            self._service(None).set_time(self._fields())
+
+    def test_validation_happens_before_clock_check(self):
+        # A platform without an RTC must still report bad input as invalid
+        # (ValueError -> 400), not as unsupported (501).
+        with self.assertRaises(ValueError):
+            self._service(None).set_time(self._fields(month=13))
+
+    def test_impossible_date_rejected_without_touching_clock(self):
+        clock = FakeSettableClock()
+        with self.assertRaises(ValueError):
+            self._service(clock).set_time(self._fields(month=2, day=30))
+        self.assertEqual([], clock.set_calls)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,13 +17,12 @@ import gc
 import json
 import time
 
-from smart_kosher.adapters import H2Simulator
+from smart_kosher.adapters import H2Simulator, MachineRtcClock, SettingsStore
 from smart_kosher.adapters.json_repository import JsonEventJournal, JsonRepository
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.executor import Executor
 from smart_kosher.web.server import create_app
-from smart_kosher.web.settings_store import SettingsStore
 
 DATA_DIR = "/data"
 WIFI_CONFIG = DATA_DIR + "/wifi.json"
@@ -89,7 +88,8 @@ def main():
     def status_info():
         return {"gateway": "simulator", "storage": "json"}
 
-    app = create_app(crud, control, settings, repo, status_info)
+    app = create_app(crud, control, settings, repo, status_info,
+                     clock=MachineRtcClock())
 
     gc.collect()
     # Collect early and often instead of waiting for the heap to fill —

@@ -13,13 +13,14 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from smart_kosher.adapters import H2Simulator, MemoryEventJournal, MemoryRepository
+from smart_kosher.adapters import (
+    H2Simulator, MemoryEventJournal, MemoryRepository, SettingsStore,
+)
 from smart_kosher.adapters.json_repository import JsonRepository
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.executor import Executor
 from smart_kosher.web.server import create_app
-from smart_kosher.web.settings_store import SettingsStore
 
 # ── Storage mode ──────────────────────────────────────────────────────────────
 # "memory" → in-memory only (resets on restart, good for quick UI testing)

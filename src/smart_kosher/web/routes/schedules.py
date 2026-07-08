@@ -1,19 +1,18 @@
 """Routes for /api/schedules — CRUD, enabled toggle, and upcoming preview."""
 
-from .. import planning
 from ..responses import ok, err
 from . import handle_error, require_json_body
 
 _MAX_PREVIEW_DAYS = 7
 
 
-def register(app, crud_service, repository=None, settings_store=None):
+def register(app, crud_service, settings_store=None, views=None):
 
     @app.get("/api/schedules")
     async def list_schedules(req):
         return ok(crud_service.list("schedules"))
 
-    if repository is not None and settings_store is not None:
+    if views is not None and settings_store is not None:
 
         @app.get("/api/schedules/upcoming")
         async def upcoming(req):
@@ -25,9 +24,7 @@ def register(app, crud_service, repository=None, settings_store=None):
             if not 1 <= days <= _MAX_PREVIEW_DAYS:
                 return err("days must be in 1..{}".format(_MAX_PREVIEW_DAYS))
             try:
-                events, errors = planning.upcoming_events(
-                    repository, settings_store.get(), days
-                )
+                events, errors = views.upcoming_events(settings_store.get(), days)
             except Exception as exc:
                 return handle_error(exc)
             return ok({"days": days, "events": events, "planner_errors": errors})

@@ -11,6 +11,8 @@ from microdot import Microdot
 # MicroPython exposes gc.mem_free; CPython does not.
 _IS_MICROPYTHON = hasattr(gc, "mem_free")
 
+from ..application.device_time import DeviceTimeService
+from ..application.views import ViewService
 from .routes import (
     zones, endpoints, groups, schedules, control, settings, status, today,
     device_time,
@@ -18,18 +20,25 @@ from .routes import (
 
 
 def create_app(crud_service, control_service, settings_store,
-               repository=None, status_info=None):
+               repository=None, status_info=None, clock=None):
+    """``clock`` is a SettableClock adapter, or None when the platform has
+    no settable RTC (CPython dev server / tests)."""
     app = Microdot()
+
+    # Only upcoming_events needs the repository; the day view works without.
+    views = ViewService(repository)
+    device_time_service = DeviceTimeService(clock)
 
     zones.register(app, crud_service)
     endpoints.register(app, crud_service)
     groups.register(app, crud_service)
-    schedules.register(app, crud_service, repository, settings_store)
+    schedules.register(app, crud_service, settings_store,
+                       views if repository is not None else None)
     control.register(app, control_service)
     settings.register(app, settings_store)
     status.register(app, settings_store, status_info)
-    today.register(app, settings_store)
-    device_time.register(app)
+    today.register(app, settings_store, views)
+    device_time.register(app, device_time_service)
 
     if _IS_MICROPYTHON:
         # On a no-PSRAM board every request leaves allocation churn behind;

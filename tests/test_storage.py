@@ -210,7 +210,7 @@ class SettingsStoreTests(unittest.TestCase):
             shutil.rmtree(self.base)
 
     def _store(self, defaults=None):
-        from smart_kosher.web.settings_store import SettingsStore
+        from smart_kosher.adapters.settings_store import SettingsStore
         return SettingsStore(self.path, defaults=defaults)
 
     def test_defaults_when_no_file(self):
