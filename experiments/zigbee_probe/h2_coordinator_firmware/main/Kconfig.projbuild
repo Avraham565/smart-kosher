@@ -8,13 +8,17 @@ menu "Smart Kosher H2 Coordinator"
         int "UART TX GPIO"
         default 24
         help
-            Proven CrowPanel Advance slot mapping: H2 GPIO24 -> S3 GPIO19.
+            Per-target value comes from sdkconfig.defaults.<target>.
+            esp32h2 (CrowPanel slot): GPIO24 -> S3 GPIO19.
+            esp32c6 (NanoC6 Grove):   GPIO1 (white) -> AtomS3 G1.
 
     config COORD_UART_RXD_PIN
         int "UART RX GPIO"
         default 2
         help
-            Proven CrowPanel Advance slot mapping: S3 GPIO5 -> H2 GPIO2.
+            Per-target value comes from sdkconfig.defaults.<target>.
+            esp32h2 (CrowPanel slot): S3 GPIO5 -> GPIO2.
+            esp32c6 (NanoC6 Grove):   AtomS3 G2 (yellow) -> GPIO2.
 
     config COORD_UART_BAUD_RATE
         int "UART baud rate"

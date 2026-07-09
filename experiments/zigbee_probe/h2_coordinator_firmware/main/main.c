@@ -1,6 +1,10 @@
 /*
- * Gate-2 coordinator firmware — ESP32-H2
+ * Gate-2 coordinator firmware — ESP32-H2 / ESP32-C6
  * esp-zigbee-sdk v2.x  /  ESP-IDF ≥5.2
+ *
+ * Target-specific UART pins live in sdkconfig.defaults.<target>;
+ * everything else (Zigbee native radio, UART driver, NVS) is identical
+ * on both chips.
  *
  * H2 is a pure execution arm — no device state, no table.
  * S3 owns the device registry and supplies all addressing per command.
@@ -45,7 +49,7 @@
 
 #define TAG        "H2_COORD"
 #define FW_NAME    "smart_kosher_h2_coordinator"
-#define FW_VERSION "0.6.0"
+#define FW_VERSION "0.7.0"
 #define COORD_EP   1
 #define REPORT_MAX_INTERVAL_S 3600
 
@@ -315,6 +319,7 @@ static void cmd_ping(const char *rid)
     cJSON *p = cJSON_AddObjectToObject(root, "payload");
     cJSON_AddStringToObject(p, "firmware",         FW_NAME);
     cJSON_AddStringToObject(p, "firmware_version", FW_VERSION);
+    cJSON_AddStringToObject(p, "target",           CONFIG_IDF_TARGET);
     cJSON_AddBoolToObject(p,   "network_up",       s_net_up);
     uart_send_json(root);
     cJSON_Delete(root);
@@ -704,6 +709,7 @@ void app_main(void)
         cJSON *p = cJSON_AddObjectToObject(root, "payload");
         cJSON_AddStringToObject(p, "firmware",         FW_NAME);
         cJSON_AddStringToObject(p, "firmware_version", FW_VERSION);
+        cJSON_AddStringToObject(p, "target",           CONFIG_IDF_TARGET);
         cJSON_AddNumberToObject(p, "uart_tx_pin", CONFIG_COORD_UART_TXD_PIN);
         cJSON_AddNumberToObject(p, "uart_rx_pin", CONFIG_COORD_UART_RXD_PIN);
         for (int i = 0; i < CONFIG_COORD_BOOT_BEACON_COUNT; i++) {

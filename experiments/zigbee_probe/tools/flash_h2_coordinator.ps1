@@ -1,11 +1,18 @@
 param(
     [string]$Port     = "COM6",
+    [ValidateSet("esp32h2", "esp32c6")]
+    [string]$Chip     = "esp32h2",
     [int]   $Baud     = 460800,
     [string]$Python   = "C:\Python314\python.exe",
-    [string]$FlashDir = "C:\tmp\h2_coordinator_flash"
+    [string]$FlashDir = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($FlashDir)) {
+    $FlashDir = "C:\tmp\coordinator_flash_$Chip"
+    if ($Chip -eq "esp32h2") { $FlashDir = "C:\tmp\h2_coordinator_flash" }
+}
 
 $bootloader  = Join-Path $FlashDir "bootloader.bin"
 $partition   = Join-Path $FlashDir "partition-table.bin"
@@ -17,18 +24,18 @@ foreach ($file in @($bootloader, $partition, $app)) {
     }
 }
 
-& $Python -m esptool --chip esp32h2 --port $Port --baud $Baud write-flash `
+& $Python -m esptool --chip $Chip --port $Port --baud $Baud write-flash `
     0x0      $bootloader `
     0x8000   $partition  `
     0x10000  $app
 
 if ($LASTEXITCODE -ne 0) { throw "Flash failed with exit code $LASTEXITCODE" }
 
-& $Python -m esptool --chip esp32h2 --port $Port --baud $Baud verify-flash `
+& $Python -m esptool --chip $Chip --port $Port --baud $Baud verify-flash `
     0x0      $bootloader `
     0x8000   $partition  `
     0x10000  $app
 
 if ($LASTEXITCODE -ne 0) { throw "Verify failed with exit code $LASTEXITCODE" }
 
-Write-Host "H2 coordinator flash and verify complete."
+Write-Host "$Chip coordinator flash and verify complete."

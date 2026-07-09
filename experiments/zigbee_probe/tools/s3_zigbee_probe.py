@@ -1,4 +1,4 @@
-"""Gate 2 Zigbee probe — persistence + rejoin recovery.
+"""Gate 2 Zigbee probe -- persistence + rejoin recovery.
 
 S3 is the state owner: persists device registry to /devices.json.
 H2 is a pure execution arm: stateless between requests.
@@ -7,12 +7,12 @@ Boot flow:
   1. Load saved registry from /devices.json (if exists).
   2. Confirm H2 alive (boot event or ping fallback).
   3. Wait for network_formed.
-  4. Grace period (8 s): collect device_joined events → update short_addrs.
-  5a. If devices known (restored): skip pairing → go to ON/OFF test.
-  5b. If no devices: open permit_join → wait for device_joined → save.
-  6. on_off ON  → verify via read_attr.
-  7. on_off OFF → verify via read_attr.
-  8. remove_device → verify + remove from file.
+  4. Grace period (8 s): collect device_joined events -> update short_addrs.
+  5a. If devices known (restored): skip pairing -> go to ON/OFF test.
+  5b. If no devices: open permit_join -> wait for device_joined -> save.
+  6. on_off ON  -> verify via read_attr.
+  7. on_off OFF -> verify via read_attr.
+  8. remove_device -> verify + remove from file.
   9. Report RESULT PASS / FAIL.
 """
 
@@ -20,9 +20,20 @@ import json
 import time
 from machine import UART
 
+# Hardware profile: pick the pins matching the board this script runs on.
+#   "crowpanel_h2": CrowPanel Advance S3 <-> ESP32-H2 module slot (TX=5, RX=19)
+#   "atom_nano":    AtomS3 Lite Grove <-> M5 NanoC6 Grove         (TX=2, RX=1)
+# Grove cable is straight (G1<->G1 white, G2<->G2 yellow); the TX/RX cross is
+# done in software: Atom TX=G2 -> NanoC6 RX=GPIO2, NanoC6 TX=GPIO1 -> Atom RX=G1.
+PROFILE = "atom_nano"
+
 UART_ID          = 1
-S3_TX_PIN        = 5
-S3_RX_PIN        = 19
+if PROFILE == "atom_nano":
+    S3_TX_PIN    = 2
+    S3_RX_PIN    = 1
+else:
+    S3_TX_PIN    = 5
+    S3_RX_PIN    = 19
 BAUD             = 115200
 JOIN_TIMEOUT_MS  = 120_000
 RESP_TIMEOUT_MS  = 8_000
@@ -30,7 +41,7 @@ REJOIN_GRACE_MS  = 8_000
 DEVICES_PATH     = "/devices.json"
 
 
-# ── CRC-32 ────────────────────────────────────────────────────────
+# -- CRC-32 --------------------------------------------------------
 
 def crc32(data):
     crc = 0xFFFFFFFF
@@ -42,7 +53,7 @@ def crc32(data):
     return crc ^ 0xFFFFFFFF
 
 
-# ── Frame codec ───────────────────────────────────────────────────
+# -- Frame codec ---------------------------------------------------
 
 def encode_frame(msg):
     body = json.dumps(msg)
@@ -61,7 +72,7 @@ def decode_frame(line):
     return json.loads(body)
 
 
-# ── Transport ─────────────────────────────────────────────────────
+# -- Transport -----------------------------------------------------
 
 _seq = 0
 
@@ -112,7 +123,7 @@ def recv_until(uart, buf, match_fn, timeout_ms, on_msg=None):
     return None, buf
 
 
-# ── Device registry ───────────────────────────────────────────────
+# -- Device registry -----------------------------------------------
 #
 # devices: { ieee_addr_str: {"short_addr": "0x1234", "ep": 1} }
 
@@ -151,7 +162,7 @@ def on_device_joined(msg):
         devices[ieee]["short_addr"] = short
         devices[ieee]["ep"]         = ep
         if old != short:
-            print("    rejoin: %s  short %s → %s" % (ieee, old, short))
+            print("    rejoin: %s  short %s -> %s" % (ieee, old, short))
         else:
             print("    rejoin: %s  short=%s (unchanged)" % (ieee, short))
     else:
@@ -167,7 +178,33 @@ def on_device_removed(ieee):
         print("    registry: removed %s" % ieee)
 
 
-# ── Main probe ────────────────────────────────────────────────────
+def verify_onoff(uart, buf, short, ep, expect):
+    """Poll read_attr until the device reports the expected state.
+
+    Some relays (Telink/Tuya based) update the OnOff attribute noticeably
+    later than they switch the physical output, so a single read right
+    after the command ack can return the stale value.
+    """
+    attempts = 5
+    for i in range(attempts):
+        send_cmd(uart, "read_attr", {"short_addr": short, "endpoint": ep})
+        msg, buf = recv_until(uart, buf,
+            lambda m: m.get("op") == "read_attr" and m.get("type") == "ack",
+            RESP_TIMEOUT_MS)
+        if msg:
+            got = bool(msg.get("payload", {}).get("on_off"))
+            if got == expect:
+                return True, buf
+            print("    attempt %d/%d: on_off=%s (expect %s), retrying ..."
+                  % (i + 1, attempts, got, expect))
+        else:
+            print("    attempt %d/%d: read_attr timed out, retrying ..."
+                  % (i + 1, attempts))
+        time.sleep_ms(700)
+    return False, buf
+
+
+# -- Main probe ----------------------------------------------------
 
 def main():
     global devices
@@ -176,17 +213,17 @@ def main():
     print("=== Gate 2 Zigbee probe (persistence + rejoin) started ===")
     buf = b""
 
-    # ── 1. load saved registry ────────────────────────────────────
+    # -- 1. load saved registry ------------------------------------
     devices = load_devices()
     if devices:
         print("[1] loaded %d device(s) from %s" % (len(devices), DEVICES_PATH))
         for ieee, d in devices.items():
             print("    %s  short=%s  ep=%d" % (ieee, d["short_addr"], d["ep"]))
     else:
-        print("[1] no saved devices — fresh start")
+        print("[1] no saved devices -- fresh start")
 
-    # ── 2. confirm H2 is alive + network status ───────────────────
-    print("\n[2] waiting for H2 boot event (5 s) …")
+    # -- 2. confirm H2 is alive + network status -------------------
+    print("\n[2] waiting for H2 boot event (5 s) ...")
     net_already_up = False
     msg, buf = recv_until(uart, buf,
         lambda m: m.get("op") == "boot", 5_000)
@@ -194,7 +231,7 @@ def main():
         p = msg.get("payload", {})
         print("    H2 booted: %s %s" % (p.get("firmware"), p.get("firmware_version")))
     else:
-        print("    no boot event — H2 already running, trying ping …")
+        print("    no boot event -- H2 already running, trying ping ...")
         send_cmd(uart, "ping")
         pong, buf = recv_until(uart, buf,
             lambda m: m.get("op") == "ping" and m.get("type") == "ack", 8_000)
@@ -206,11 +243,11 @@ def main():
         print("    pong: net_up=%s  fw=%s %s" % (
             p.get("network_up"), p.get("firmware"), p.get("firmware_version")))
 
-    # ── 3. wait for network_formed (skip if already up) ───────────
+    # -- 3. wait for network_formed (skip if already up) -----------
     if net_already_up:
-        print("\n[3] network already up (from ping) — skipping wait")
+        print("\n[3] network already up (from ping) -- skipping wait")
     else:
-        print("\n[3] waiting for network_formed (30 s) …")
+        print("\n[3] waiting for network_formed (30 s) ...")
         msg, buf = recv_until(uart, buf,
             lambda m: m.get("op") == "network_formed", 30_000)
         if not msg:
@@ -220,8 +257,8 @@ def main():
         print("    network up  channel=%s  pan=0x%s  %s" % (
             p.get("channel"), p.get("pan_id"), p.get("note", "")))
 
-    # ── 4. grace period — collect rejoin events ───────────────────
-    print("\n[4] grace period %d ms — waiting for rejoins …" % REJOIN_GRACE_MS)
+    # -- 4. grace period -- collect rejoin events -------------------
+    print("\n[4] grace period %d ms -- waiting for rejoins ..." % REJOIN_GRACE_MS)
     _, buf = recv_until(uart, buf,
         lambda m: False,
         REJOIN_GRACE_MS,
@@ -229,17 +266,17 @@ def main():
     if devices:
         print("    registry after grace: %d device(s)" % len(devices))
     else:
-        print("    no rejoins — registry empty")
+        print("    no rejoins -- registry empty")
 
-    # ── 5. pair or restore ────────────────────────────────────────
+    # -- 5. pair or restore ----------------------------------------
     if devices:
         ieee  = list(devices.keys())[0]
         short = devices[ieee]["short_addr"]
         ep    = devices[ieee]["ep"]
-        print("\n[5] restored from storage — skipping pairing")
+        print("\n[5] restored from storage -- skipping pairing")
         print("    device: ieee=%s  short=%s  ep=%d" % (ieee, short, ep))
     else:
-        print("\n[5] no devices — opening network for join (180 s) …")
+        print("\n[5] no devices -- opening network for join (180 s) ...")
         send_cmd(uart, "permit_join", {"duration": 180})
         msg, buf = recv_until(uart, buf,
             lambda m: m.get("op") == "permit_join" and m.get("type") == "ack",
@@ -248,7 +285,7 @@ def main():
             print("RESULT FAIL: permit_join got no ack")
             return
 
-        print("    press pair/join on your device now …")
+        print("    press pair/join on your device now ...")
         msg, buf = recv_until(uart, buf,
             lambda m: m.get("op") == "device_joined",
             JOIN_TIMEOUT_MS)
@@ -262,8 +299,8 @@ def main():
         print("    device: ieee=%s  short=%s  ep=%d" % (ieee, short, ep))
         time.sleep_ms(1000)
 
-    # ── 6. on_off ON ──────────────────────────────────────────────
-    print("\n[6] sending on_off ON …")
+    # -- 6. on_off ON ----------------------------------------------
+    print("\n[6] sending on_off ON ...")
     send_cmd(uart, "on_off", {"state": "on", "short_addr": short, "endpoint": ep})
     msg, buf = recv_until(uart, buf,
         lambda m: m.get("op") == "on_off" and m.get("type") == "ack",
@@ -273,23 +310,17 @@ def main():
         return
     time.sleep_ms(500)
 
-    # ── 7. read_attr — verify ON ──────────────────────────────────
-    print("\n[7] reading on_off attribute (expect True) …")
-    send_cmd(uart, "read_attr", {"short_addr": short, "endpoint": ep})
-    msg, buf = recv_until(uart, buf,
-        lambda m: m.get("op") == "read_attr" and m.get("type") == "ack",
-        RESP_TIMEOUT_MS)
-    if not msg:
-        print("RESULT FAIL: read_attr (ON) timed out")
+    # -- 7. read_attr -- verify ON ----------------------------------
+    print("\n[7] reading on_off attribute (expect True) ...")
+    ok, buf = verify_onoff(uart, buf, short, ep, True)
+    if not ok:
+        print("RESULT FAIL: device never reported on_off=True")
         return
-    if not msg.get("payload", {}).get("on_off"):
-        print("RESULT FAIL: expected on_off=True, got %s" % msg.get("payload"))
-        return
-    print("    on_off = True ✓")
+    print("    on_off = True OK")
     time.sleep_ms(500)
 
-    # ── 8. on_off OFF ─────────────────────────────────────────────
-    print("\n[8] sending on_off OFF …")
+    # -- 8. on_off OFF ---------------------------------------------
+    print("\n[8] sending on_off OFF ...")
     send_cmd(uart, "on_off", {"state": "off", "short_addr": short, "endpoint": ep})
     msg, buf = recv_until(uart, buf,
         lambda m: m.get("op") == "on_off" and m.get("type") == "ack",
@@ -299,21 +330,15 @@ def main():
         return
     time.sleep_ms(500)
 
-    # ── 9. read_attr — verify OFF ─────────────────────────────────
-    print("\n[9] reading on_off attribute (expect False) …")
-    send_cmd(uart, "read_attr", {"short_addr": short, "endpoint": ep})
-    msg, buf = recv_until(uart, buf,
-        lambda m: m.get("op") == "read_attr" and m.get("type") == "ack",
-        RESP_TIMEOUT_MS)
-    if not msg:
-        print("RESULT FAIL: read_attr (OFF) timed out")
+    # -- 9. read_attr -- verify OFF ---------------------------------
+    print("\n[9] reading on_off attribute (expect False) ...")
+    ok, buf = verify_onoff(uart, buf, short, ep, False)
+    if not ok:
+        print("RESULT FAIL: device never reported on_off=False")
         return
-    if msg.get("payload", {}).get("on_off"):
-        print("RESULT FAIL: expected on_off=False, got %s" % msg.get("payload"))
-        return
-    print("    on_off = False ✓")
+    print("    on_off = False OK")
 
-    print("\nRESULT PASS: on/off verified — device stays joined for persistence test")
+    print("\nRESULT PASS: on/off verified -- device stays joined for persistence test")
 
 
 main()

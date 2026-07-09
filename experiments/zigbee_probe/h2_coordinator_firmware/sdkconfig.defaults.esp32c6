@@ -1,0 +1,7 @@
+# M5Stack NanoC6 Grove HY2.0-4P port (straight Grove cable to AtomS3 Lite):
+#   NanoC6 GPIO1 (TX, white wire)  -> AtomS3 G1 (RX)
+#   AtomS3 G2 (TX, yellow wire)    -> NanoC6 GPIO2 (RX)
+# Both chips route UART through the GPIO matrix, so the TX/RX cross happens
+# in software even though the Grove cable is pin-to-pin straight.
+CONFIG_COORD_UART_TXD_PIN=1
+CONFIG_COORD_UART_RXD_PIN=2

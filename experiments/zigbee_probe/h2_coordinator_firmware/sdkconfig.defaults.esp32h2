@@ -1,0 +1,5 @@
+# CrowPanel Advance wireless-module slot (proven, Gate 2/3):
+#   H2 GPIO24 (TX) -> S3 GPIO19 (RX)
+#   S3 GPIO5  (TX) -> H2 GPIO2  (RX)
+CONFIG_COORD_UART_TXD_PIN=24
+CONFIG_COORD_UART_RXD_PIN=2

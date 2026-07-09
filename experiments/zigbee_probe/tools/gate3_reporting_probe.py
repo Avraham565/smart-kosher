@@ -1,4 +1,4 @@
-"""Gate 3 probe — attribute reporting (push-based state, no polling).
+"""Gate 3 probe -- attribute reporting (push-based state, no polling).
 
 Flow:
   1. Confirm H2 alive (boot event or ping fallback).
@@ -15,9 +15,18 @@ import json
 import time
 from machine import UART
 
+# Hardware profile -- same convention as s3_zigbee_probe.py:
+#   "crowpanel_h2": CrowPanel Advance S3 <-> ESP32-H2 slot (TX=5, RX=19)
+#   "atom_nano":    AtomS3 Lite Grove <-> M5 NanoC6 Grove  (TX=2, RX=1)
+PROFILE = "atom_nano"
+
 UART_ID           = 1
-S3_TX_PIN         = 5
-S3_RX_PIN         = 19
+if PROFILE == "atom_nano":
+    S3_TX_PIN     = 2
+    S3_RX_PIN     = 1
+else:
+    S3_TX_PIN     = 5
+    S3_RX_PIN     = 19
 BAUD              = 115200
 JOIN_TIMEOUT_MS   = 120_000
 RESP_TIMEOUT_MS   = 8_000
@@ -26,7 +35,7 @@ PHYSICAL_WAIT_MS  = 300_000
 DEVICES_PATH      = "/devices.json"
 
 
-# ── CRC-32 + frame codec (identical to s3_zigbee_probe.py) ─────────────────
+# -- CRC-32 + frame codec (identical to s3_zigbee_probe.py) -----------------
 
 def crc32(data):
     crc = 0xFFFFFFFF
@@ -98,7 +107,7 @@ def recv_until(uart, buf, match_fn, timeout_ms, on_msg=None):
     return None, buf
 
 
-# ── Device registry ──────────────────────────────────────────────────────
+# -- Device registry ------------------------------------------------------
 
 devices = {}
 
@@ -132,7 +141,7 @@ def on_device_joined(msg):
     save_devices()
 
 
-# ── Main probe ────────────────────────────────────────────────────────────
+# -- Main probe ------------------------------------------------------------
 
 def main():
     global devices
@@ -145,7 +154,7 @@ def main():
     if devices:
         print("[1] loaded %d device(s) from %s" % (len(devices), DEVICES_PATH))
     else:
-        print("[1] no saved devices — fresh start")
+        print("[1] no saved devices -- fresh start")
 
     print("\n[2] waiting for H2 boot event (5 s) ...")
     net_already_up = False
@@ -154,7 +163,7 @@ def main():
         p = msg.get("payload", {})
         print("    H2 booted: %s %s" % (p.get("firmware"), p.get("firmware_version")))
     else:
-        print("    no boot event — trying ping ...")
+        print("    no boot event -- trying ping ...")
         send_cmd(uart, "ping")
         pong, buf = recv_until(uart, buf,
             lambda m: m.get("op") == "ping" and m.get("type") == "ack", 8_000)
@@ -167,7 +176,7 @@ def main():
             p.get("network_up"), p.get("firmware"), p.get("firmware_version")))
 
     if net_already_up:
-        print("\n[3] network already up — skipping wait")
+        print("\n[3] network already up -- skipping wait")
     else:
         print("\n[3] waiting for network_formed (30 s) ...")
         msg, buf = recv_until(uart, buf, lambda m: m.get("op") == "network_formed", 30_000)
@@ -175,7 +184,7 @@ def main():
             print("RESULT FAIL: Zigbee network did not form")
             return
 
-    print("\n[4] grace period %d ms — waiting for rejoins ..." % REJOIN_GRACE_MS)
+    print("\n[4] grace period %d ms -- waiting for rejoins ..." % REJOIN_GRACE_MS)
     _, buf = recv_until(uart, buf, lambda m: False, REJOIN_GRACE_MS,
         on_msg=lambda m: on_device_joined(m) if m.get("op") == "device_joined" else None)
 
@@ -183,10 +192,10 @@ def main():
         ieee = list(devices.keys())[0]
         short = devices[ieee]["short_addr"]
         ep = devices[ieee]["ep"]
-        print("\n[5] restored from storage — skipping pairing")
+        print("\n[5] restored from storage -- skipping pairing")
         print("    device: ieee=%s short=%s ep=%d" % (ieee, short, ep))
     else:
-        print("\n[5] no devices — opening network for join (120 s) ...")
+        print("\n[5] no devices -- opening network for join (120 s) ...")
         print("    >>> press the pair/join button on the Sonoff now <<<")
         send_cmd(uart, "permit_join", {"duration": 120})
         msg, buf = recv_until(uart, buf,
@@ -219,7 +228,7 @@ def main():
         print("RESULT FAIL: enable_reporting got no ack")
         return
     if msg.get("type") == "error" and msg.get("payload", {}).get("code") == "unknown_device":
-        print("    short_addr went stale (rejoin) — retrying with current address")
+        print("    short_addr went stale (rejoin) -- retrying with current address")
         short = devices[ieee]["short_addr"]
         send_cmd(uart, "enable_reporting", {"short_addr": short, "endpoint": ep})
         msg, buf = recv_until(uart, buf,
@@ -237,10 +246,10 @@ def main():
         print("RESULT FAIL: no reporting_configured/reporting_failed event")
         return
     if msg.get("op") == "reporting_failed":
-        print("RESULT FAIL: bind failed —", msg.get("payload"))
+        print("RESULT FAIL: bind failed --", msg.get("payload"))
         return
     if msg.get("payload", {}).get("status") != "ok":
-        print("RESULT FAIL: config_report status not ok —", msg.get("payload"))
+        print("RESULT FAIL: config_report status not ok --", msg.get("payload"))
         return
     print("    reporting configured OK")
 
