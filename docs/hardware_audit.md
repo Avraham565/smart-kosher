@@ -33,7 +33,24 @@ Known current hardware limits:
 - H2 is fully stateless — no device table, no RAM between requests. Per-request only: `s_pending_rid`/`s_pending_short` for async `read_attr` correlation.
 - S3 owns the device registry (`devices` dict) — RAM only for now, not persisted across S3 reboot.
 - Multiple joined devices are supported in the protocol; persistence is the next step.
-- The Python product app does not yet have a production hardware gateway.
+
+## Production Gateway (2026-07-09)
+
+The same firmware now also builds for the M5 NanoC6 (`esp32c6`) and passed
+Gate 2+3 on product B hardware (AtomS3 Lite + NanoC6 over Grove, UART1
+115200, Atom TX=G2 -> Nano GPIO2, Nano GPIO1 -> Atom RX=G1).
+
+`src/smart_kosher/adapters/zigbee_gateway.py` is the production
+DeviceGateway over this protocol — verified end-to-end on hardware through
+the real product stack (deploy -> permit_join via `zigbee.permit_join` ->
+device_joined persisted to `/data/zigbee_devices.json` + auto
+enable_reporting -> `control.send` on/off/toggle -> executed + journaled ->
+`attribute_report` updates live state in the background poll task).
+
+Lesson from first device run: `json.dumps(msg, separators=..., ensure_ascii=...)`
+raises `TypeError: extra keyword arguments given` on MicroPython — code that
+is only "MicroPython-compatible in theory" (uart_codec was never exercised
+on-device before) must still be proven on hardware.
 
 ## Keep
 

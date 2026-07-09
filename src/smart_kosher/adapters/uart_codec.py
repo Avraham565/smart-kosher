@@ -7,8 +7,18 @@ _LOWER_HEX = "0123456789abcdef"
 
 
 def encode(msg: dict) -> bytes:
-    """Serialize msg to a UART line.  Key order follows insertion order of msg."""
-    body = _json.dumps(msg, separators=(",", ":"), ensure_ascii=False)
+    """Serialize msg to a UART line.  Key order follows insertion order of msg.
+
+    The CRC covers the sender's own serialization, so the exact separator
+    style does not affect interop — but MicroPython's json.dumps rejects
+    the kwargs CPython uses (TypeError: extra keyword arguments given),
+    hence the fallback. ASCII escaping (the default) is fine either way:
+    protocol payloads are ASCII.
+    """
+    try:
+        body = _json.dumps(msg, separators=(",", ":"))
+    except TypeError:  # MicroPython
+        body = _json.dumps(msg)
     crc = binascii.crc32(body.encode("utf-8")) & 0xFFFFFFFF
     return f"{crc:08x} {body}\n".encode("utf-8")
 

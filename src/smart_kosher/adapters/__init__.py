@@ -7,9 +7,11 @@ from .memory_repository import MemoryEventJournal, MemoryRepository
 from .settings_store import SettingsStore
 from .uart_codec import decode as uart_decode
 from .uart_codec import encode as uart_encode
+from .zigbee_gateway import ZigbeeGateway
 
 __all__ = [
     "H2Simulator",
+    "ZigbeeGateway",
     "JsonEventJournal",
     "JsonRepository",
     "MachineRtcClock",

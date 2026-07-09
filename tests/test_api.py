@@ -115,6 +115,57 @@ class DispatchContractTests(unittest.TestCase):
             self.assertIn(expected, ops)
 
 
+class FakeZigbee:
+    def __init__(self):
+        self.permit_calls = []
+
+    def devices(self):
+        return {"a4:c1:38:6b:47:9d:c2:55": {"short_addr": "0xa7d8",
+                                            "endpoint": 1,
+                                            "reporting": True,
+                                            "on_off": True}}
+
+    def permit_join(self, duration):
+        self.permit_calls.append(duration)
+        return {"status": "sent_to_zigbee", "command_id": "permit_join-1"}
+
+
+class ZigbeeOpsTests(unittest.TestCase):
+    def _api(self, zigbee):
+        repo = MemoryRepository()
+        executor = Executor(H2Simulator(["sent_to_zigbee"]),
+                            MemoryEventJournal())
+        return Api(
+            CrudService(repo),
+            ControlService(executor, repo),
+            FakeSettings({"utc_offset_minutes": 120, "in_israel": True}),
+            views=ViewService(repo),
+            device_time=DeviceTimeService(None),
+            zigbee=zigbee,
+        )
+
+    def test_zigbee_ops_absent_without_gateway(self):
+        api = self._api(None)
+        self.assertNotIn("zigbee.devices", api.ops())
+        with self.assertRaises(ApiError) as ctx:
+            api.dispatch("zigbee.permit_join", {"duration": 60})
+        self.assertEqual(BAD_REQUEST, ctx.exception.kind)
+
+    def test_zigbee_devices_returns_registry_view(self):
+        data = self._api(FakeZigbee()).dispatch("zigbee.devices", {})
+        self.assertIn("a4:c1:38:6b:47:9d:c2:55", data)
+        self.assertTrue(data["a4:c1:38:6b:47:9d:c2:55"]["on_off"])
+
+    def test_permit_join_defaults_and_validates_duration(self):
+        zigbee = FakeZigbee()
+        api = self._api(zigbee)
+        api.dispatch("zigbee.permit_join", {})
+        self.assertEqual([180], zigbee.permit_calls)
+        for bad in (0, 255, "60", True, -1):
+            with self.assertRaises(ApiError):
+                api.dispatch("zigbee.permit_join", {"duration": bad})
+
+
 class FakeClock:
     def __init__(self, now):
         self._now = now

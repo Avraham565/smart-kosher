@@ -115,13 +115,14 @@ class Api:
     """op → handler table over the application services."""
 
     def __init__(self, crud_service, control_service, settings_store,
-                 views, device_time, status_info=None):
+                 views, device_time, status_info=None, zigbee=None):
         self._crud = crud_service
         self._control = control_service
         self._settings = settings_store
         self._views = views
         self._device_time = device_time
         self._status_info = status_info
+        self._zigbee = zigbee
         self._started = time.time()
 
         ops = {}
@@ -136,6 +137,11 @@ class Api:
         ops["status.get"] = self._status
         ops["today.get"] = self._today
         ops["time.set"] = self._time_set
+        if zigbee is not None:
+            # Pairing/registry surface — only when a real radio gateway is
+            # wired (the simulator has nothing to pair).
+            ops["zigbee.devices"] = self._zigbee_devices
+            ops["zigbee.permit_join"] = self._zigbee_permit_join
         self._ops = ops
 
     def ops(self):
@@ -224,6 +230,17 @@ class Api:
             target_id=params.get("target_id"),
             action_type=params.get("action_type"),
         )
+
+    # ── Zigbee pairing / registry ─────────────────────────────────────────────
+
+    def _zigbee_devices(self, params):
+        return self._zigbee.devices()
+
+    def _zigbee_permit_join(self, params):
+        duration = params.get("duration", 180)
+        if not _is_int(duration) or not 1 <= duration <= 254:
+            raise ApiError(BAD_REQUEST, "duration must be an integer in 1..254")
+        return self._zigbee.permit_join(duration)
 
     # ── Settings ──────────────────────────────────────────────────────────────
 

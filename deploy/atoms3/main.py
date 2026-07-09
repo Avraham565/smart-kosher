@@ -24,7 +24,7 @@ import json
 import time
 
 from smart_kosher import serial_channel
-from smart_kosher.adapters import H2Simulator, MachineRtcClock, SettingsStore
+from smart_kosher.adapters import MachineRtcClock, SettingsStore, ZigbeeGateway
 from smart_kosher.adapters.json_repository import JsonEventJournal, JsonRepository
 from smart_kosher.application.api import Api, ApiError, BAD_REQUEST
 from smart_kosher.application.control_service import ControlService
@@ -37,6 +37,16 @@ from smart_kosher.web.server import create_app
 DATA_DIR = "/data"
 WIFI_CONFIG = DATA_DIR + "/wifi.json"
 WIFI_CONNECT_TIMEOUT_S = 20
+
+# Grove link to the NanoC6 coordinator (proven 2026-07-09, Gate 2+3):
+# Atom TX=G2 -> NanoC6 GPIO2, NanoC6 GPIO1 -> Atom RX=G1. Straight cable;
+# the TX/RX cross happens here, via the GPIO matrix.
+ZIGBEE_UART_ID = 1
+ZIGBEE_TX_PIN = 2
+ZIGBEE_RX_PIN = 1
+ZIGBEE_BAUD = 115200
+ZIGBEE_REGISTRY = DATA_DIR + "/zigbee_devices.json"
+ZIGBEE_POLL_MS = 200
 
 # AtomS3 Lite has no PSRAM (~250KB usable heap). The journal keeps every
 # record as Python objects in RAM, so keep it small; 64 records still cover
@@ -121,10 +131,17 @@ def device_ops():
     }
 
 
+def make_gateway(repo):
+    from machine import UART
+    uart = UART(ZIGBEE_UART_ID, baudrate=ZIGBEE_BAUD,
+                tx=ZIGBEE_TX_PIN, rx=ZIGBEE_RX_PIN, timeout=0)
+    return ZigbeeGateway(uart, repo, registry_path=ZIGBEE_REGISTRY)
+
+
 def main():
     repo     = JsonRepository(DATA_DIR)
     journal  = JsonEventJournal(repo, max_records=JOURNAL_MAX_RECORDS)
-    gateway  = H2Simulator()  # replace with the real gateway once NanoC6 is wired
+    gateway  = make_gateway(repo)
     executor = Executor(gateway, journal)
     crud     = CrudService(repo)
     control  = ControlService(executor, repo)
@@ -144,13 +161,16 @@ def main():
     ip = connect_wifi()
 
     def status_info():
-        return {"gateway": "simulator", "storage": "json"}
+        info = {"storage": "json"}
+        info.update(gateway.status_info())
+        return info
 
     api = Api(
         crud, control, settings,
         views=ViewService(repo),
         device_time=DeviceTimeService(MachineRtcClock()),
         status_info=status_info,
+        zigbee=gateway,
     )
     app = create_app(crud, control, settings, api=api)
 
@@ -164,10 +184,25 @@ def main():
         print("Smart Kosher hub API: http://{}/api/status".format(ip))
     print("free heap after boot:", gc.mem_free())
 
+    async def poll_zigbee():
+        # Drain spontaneous coordinator events (device_joined,
+        # attribute_report) between commands. gateway.send() and poll()
+        # never overlap — one cooperative loop, and send() doesn't await.
+        while True:
+            try:
+                gateway.poll()
+            except Exception as exc:
+                print("zigbee poll error:", exc)
+            await asyncio.sleep_ms(ZIGBEE_POLL_MS)
+
     # No debug=True: HTTP request logging would interleave with the serial
     # channel's JSON lines on the shared USB CDC.
     async def run():
         server = asyncio.create_task(app.start_server(host="0.0.0.0", port=80))
+        poller = asyncio.create_task(poll_zigbee())
+        # Learn coordinator liveness for status.get; the NanoC6 booted with
+        # us (shared power), so its boot beacons may have passed already.
+        gateway.ping()
         print("serial channel ready")
         await serial_channel.serve(api, device_ops())
 
