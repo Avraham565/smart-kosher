@@ -520,3 +520,138 @@ button:focus-visible, input:focus-visible, select:focus-visible, .toggle:focus-w
 .settings-edit {
   margin-top: 12px;
 }
+
+/* ── device list rows + single state button ────────────────────────────── */
+
+.device-row .card-row { align-items: center; }
+
+.device-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  cursor: pointer;
+  text-align: right;
+  font: inherit;
+  color: inherit;
+}
+
+.state-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid #d1d5db;
+  background: #f3f4f6;
+  color: #9ca3af;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background .15s, color .15s, border-color .15s, box-shadow .15s;
+}
+.state-btn.is-on {
+  background: #fbbf24;
+  border-color: #f59e0b;
+  color: #78350f;
+  box-shadow: 0 0 10px rgba(251, 191, 36, .55);
+}
+.state-btn.is-off {
+  background: #e5e7eb;
+  border-color: #9ca3af;
+  color: #374151;
+}
+.state-btn.unreachable {
+  background: #fee2e2;
+  border-color: #f87171;
+  color: #b91c1c;
+}
+.state-btn[aria-busy="true"] { opacity: .5; cursor: wait; }
+
+.zone-live {
+  font-size: 12px;
+  font-weight: 400;
+  color: #6b7280;
+  margin-inline-start: 8px;
+}
+
+/* ── device page ───────────────────────────────────────────────────────── */
+
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.page-head .page-title {
+  flex: 1;
+  margin: 0;
+  font-size: 20px;
+}
+.btn-icon.back { font-size: 20px; }
+
+.power-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 0 22px;
+}
+
+.power-btn {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 4px solid #d1d5db;
+  background: #f3f4f6;
+  color: #9ca3af;
+  font-size: 52px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .2s, color .2s, border-color .2s, box-shadow .2s, transform .1s;
+}
+.power-btn:active { transform: scale(.96); }
+.power-btn.is-on {
+  background: #fbbf24;
+  border-color: #f59e0b;
+  color: #78350f;
+  box-shadow: 0 0 34px rgba(251, 191, 36, .6);
+}
+.power-btn.is-off {
+  background: #e5e7eb;
+  border-color: #9ca3af;
+  color: #374151;
+}
+.power-btn.unreachable {
+  background: #fee2e2;
+  border-color: #f87171;
+  color: #b91c1c;
+}
+.power-btn[aria-busy="true"] { opacity: .5; cursor: wait; }
+
+.power-state {
+  font-size: 15px;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.next-action .next-action-line strong { color: #1f2937; }
+
+.schedule-mini {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+.schedule-mini:last-child { border-bottom: none; }
+.schedule-mini-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hidden { display: none; }

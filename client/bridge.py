@@ -81,6 +81,10 @@ def rest_to_op(method, path, query, body):
                 {"id": parts[1], "enabled": (body or {}).get("enabled")}, False)
     if parts == ["control"] and method == "POST":
         return "control.send", body or {}, False
+    if parts == ["zigbee", "devices"] and method == "GET":
+        return "zigbee.devices", {}, False
+    if parts == ["zigbee", "permit_join"] and method == "POST":
+        return "zigbee.permit_join", body or {}, False
     if parts == ["settings"]:
         if method == "GET":
             return "settings.get", {}, False

@@ -11,11 +11,13 @@ import { api, ensureOk } from './api.js';
 export const state = {
   tab: 'devices',
   subTab: 'endpoints',   // devices sub-tab: endpoints | groups | zones
+  deviceId: null,        // open device page, when tab === 'device'
   zones: [],
   endpoints: [],
   groups: [],
   schedules: [],
   settings: {},
+  zigbee: {},            // ieee -> {short_addr, endpoint, reporting, on_off?, unreachable?}
   loaded: {},            // collection name -> true after first fetch
 };
 
@@ -57,4 +59,31 @@ export function byId(collection, id) {
 
 export function invalidate(...names) {
   for (const n of names) state.loaded[n] = false;
+}
+
+// ── live radio state ───────────────────────────────────────────────────
+
+// Refreshes the ieee -> live-state map. Cheap (one op) and safe to poll;
+// returns false when the hub has no radio gateway (dev simulator).
+export async function refreshZigbee() {
+  const res = await api.get('/api/zigbee/devices');
+  if (!res.ok) return false;
+  state.zigbee = res.data || {};
+  return true;
+}
+
+// Live radio info for an endpoint entity, joined by its ieee address.
+export function radioOf(endpoint) {
+  if (!endpoint || !endpoint.ieee_address) return null;
+  return state.zigbee[endpoint.ieee_address] || null;
+}
+
+// Schedules aimed at this endpoint, directly or through a group.
+export function schedulesFor(endpointId) {
+  const groupIds = state.groups
+    .filter(g => (g.member_ids || []).includes(endpointId))
+    .map(g => g.id);
+  return state.schedules.filter(sch =>
+    (sch.target_type === 'endpoint' && sch.target_id === endpointId) ||
+    (sch.target_type === 'group' && groupIds.includes(sch.target_id)));
 }

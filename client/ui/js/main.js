@@ -10,8 +10,11 @@
 import { isConnectionError } from './api.js';
 import { bindDelegation, esc, errorBanner, loadingView, registerActions, setMain } from './dom.js';
 import { initModal } from './modal.js';
-import { state } from './store.js';
-import { deleteEntity, loadDevices, renderDevices } from './views/devices.js';
+import { refreshZigbee, state } from './store.js';
+import {
+  deleteEntity, loadDevices, refreshStateButtons, renderDevices,
+} from './views/devices.js';
+import { refreshDeviceLive } from './views/device.js';
 import { loadSchedules, renderSchedules } from './views/schedules.js';
 import { loadSettings } from './views/settings.js';
 import { loadConnection, updateHeaderStatus } from './views/connection.js';
@@ -60,10 +63,23 @@ registerActions({
   'show-tab': el => showTab(el.dataset.tab),
   'delete-entity': el => deleteEntity(
     el, el.dataset.collection === 'schedules' ? renderSchedules : renderDevices),
+  // Deleting from the device page navigates back to the list.
+  'delete-device-page': el => deleteEntity(el, () => showTab('devices')),
 });
+
+// Live-state poll: the hub learns wall-switch presses by push; the UI
+// polls the hub's registry only while a state-showing view is open.
+async function pollLiveState() {
+  if (state.tab === 'devices') {
+    if (await refreshZigbee()) refreshStateButtons();
+  } else if (state.tab === 'device') {
+    await refreshDeviceLive();
+  }
+}
 
 bindDelegation(document.body);
 initModal();
 showTab('devices');
 updateHeaderStatus();
 setInterval(updateHeaderStatus, 5000);
+setInterval(pollLiveState, 4000);

@@ -92,6 +92,20 @@ def register_all(app, api):
             return error
         return await _result(api, "control.send", body)
 
+    # Radio registry + pairing. The ops exist only when a real gateway is
+    # wired; without one the dispatcher answers unknown-op (400), which is
+    # exactly what a simulator-backed dev server should say.
+    @app.get("/api/zigbee/devices")
+    async def zigbee_devices(req):
+        return await _result(api, "zigbee.devices")
+
+    @app.post("/api/zigbee/permit_join")
+    async def zigbee_permit_join(req):
+        body, error = require_json_body(req)
+        if error:
+            return error
+        return await _result(api, "zigbee.permit_join", body)
+
     @app.get("/api/settings")
     async def settings_get(req):
         return await _result(api, "settings.get")
