@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 import os
 import shutil
@@ -46,7 +47,7 @@ class ExecutorTests(unittest.TestCase):
     def test_retries_timeout_then_records_ack(self):
         gateway = H2Simulator(["timeout", "sent_to_zigbee"])
         journal = MemoryEventJournal()
-        outcome = Executor(gateway, journal, max_attempts=3).execute(event())
+        outcome = asyncio.run(Executor(gateway, journal, max_attempts=3).execute(event()))
         self.assertEqual("executed", outcome["status"])
         self.assertEqual(2, outcome["attempts"])
         self.assertEqual(2, len(gateway.commands))
@@ -56,22 +57,22 @@ class ExecutorTests(unittest.TestCase):
         gateway = H2Simulator()
         journal = MemoryEventJournal()
         executor = Executor(gateway, journal)
-        executor.execute(event())
-        outcome = executor.execute(event())
+        asyncio.run(executor.execute(event()))
+        outcome = asyncio.run(executor.execute(event()))
         self.assertEqual("already_executed", outcome["status"])
         self.assertEqual(1, len(gateway.commands))
 
     def test_failed_event_is_not_recorded(self):
         gateway = H2Simulator(["timeout", "error"])
         journal = MemoryEventJournal()
-        outcome = Executor(gateway, journal, max_attempts=2).execute(event())
+        outcome = asyncio.run(Executor(gateway, journal, max_attempts=2).execute(event()))
         self.assertEqual("failed", outcome["status"])
         self.assertFalse(journal.was_executed("event-1"))
 
     def test_accepted_by_h2_is_not_recorded_as_executed(self):
         gateway = H2Simulator(["accepted_by_h2"])
         journal = MemoryEventJournal()
-        outcome = Executor(gateway, journal, max_attempts=1).execute(event())
+        outcome = asyncio.run(Executor(gateway, journal, max_attempts=1).execute(event()))
         self.assertEqual("failed", outcome["status"])
         self.assertFalse(journal.was_executed("event-1"))
 
@@ -86,7 +87,7 @@ class ExecutorTests(unittest.TestCase):
                 raise OSError("disk full")
 
         gateway = H2Simulator()
-        outcome = Executor(gateway, FailingJournal(), max_attempts=3).execute(event())
+        outcome = asyncio.run(Executor(gateway, FailingJournal(), max_attempts=3).execute(event()))
         self.assertEqual("ack_unjournaled", outcome["status"])
         self.assertEqual(1, len(gateway.commands))
 
@@ -99,8 +100,10 @@ class RecoveryTests(unittest.TestCase):
         executor = Executor(gateway, MemoryEventJournal())
         recovery = RecoveryService(planner, executor)
 
-        first = recovery.recover((2026, 6, 8, 9, 59), (2026, 6, 8, 10, 1))
-        second = recovery.recover((2026, 6, 8, 9, 59), (2026, 6, 8, 10, 1))
+        first = asyncio.run(
+            recovery.recover((2026, 6, 8, 9, 59), (2026, 6, 8, 10, 1)))
+        second = asyncio.run(
+            recovery.recover((2026, 6, 8, 9, 59), (2026, 6, 8, 10, 1)))
         self.assertEqual(1, first["event_count"])
         self.assertEqual("executed", first["outcomes"][0]["status"])
         self.assertEqual("already_executed", second["outcomes"][0]["status"])
@@ -118,7 +121,8 @@ class RecoveryTests(unittest.TestCase):
                 Planner(PlannerConfig(31.7683, 35.2137), first_repository),
                 Executor(first_gateway, JsonEventJournal(first_repository)),
             )
-            first_recovery.recover((2026, 6, 8, 9, 59), (2026, 6, 8, 10, 1))
+            asyncio.run(first_recovery.recover(
+                (2026, 6, 8, 9, 59), (2026, 6, 8, 10, 1)))
             self.assertEqual(1, len(first_gateway.commands))
 
             rebooted_repository = JsonRepository(base)
@@ -127,10 +131,10 @@ class RecoveryTests(unittest.TestCase):
                 Planner(PlannerConfig(31.7683, 35.2137), rebooted_repository),
                 Executor(rebooted_gateway, JsonEventJournal(rebooted_repository)),
             )
-            result = rebooted_recovery.recover(
+            result = asyncio.run(rebooted_recovery.recover(
                 (2026, 6, 8, 9, 59),
                 (2026, 6, 8, 10, 1),
-            )
+            ))
             self.assertEqual("already_executed", result["outcomes"][0]["status"])
             self.assertEqual([], rebooted_gateway.commands)
         finally:

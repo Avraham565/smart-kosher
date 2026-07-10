@@ -52,6 +52,32 @@ raises `TypeError: extra keyword arguments given` on MicroPython — code that
 is only "MicroPython-compatible in theory" (uart_codec was never exercised
 on-device before) must still be proven on hardware.
 
+### Async redesign (2026-07-09, same day)
+
+The whole command chain is now async end-to-end (gateway -> Executor ->
+ControlService -> Api.dispatch -> HTTP routes / serial channel): no polling
+sleeps anywhere. Inbound is one `asyncio.StreamReader(uart)` reader task;
+each command awaits an `asyncio.Event` keyed by request_id, resolved the
+moment its ack frame arrives. Verified on hardware.
+
+- Ack timeout 1500ms (acks measured well under 500ms on hardware).
+- Circuit breaker is **ping-verdict only**: a device command timing out is
+  ambiguous (dead link vs dead device), so it fires a single background
+  probe ping; only ping timeouts open the breaker, any inbound frame
+  closes it. A silent device gets `unreachable: true` in `zigbee.devices`
+  instead (cleared by its next report/rejoin).
+- Toggle flips the live reported state when known — one round-trip;
+  read_attr only on a cold cache.
+- `control.send` accepts `confirm_ms`: after the ack, wait up to that long
+  for the device's own attribute_report to say the state actually changed
+  (`confirmation: {confirmed, observed}` in the result) — ACK level 4
+  (observed_state) per the architecture decision. Proven on hardware:
+  `confirmed: true` arrived from a real report.
+- Field lesson: a device can drop off the mesh and keep its short_addr on
+  rejoin; when the hub is down during the rejoin announce, device_joined
+  is lost. A power-cycle of the device heals it. MicroPython quirk:
+  `await` inside a list comprehension is a compile error (mpy-cross).
+
 ## Keep
 
 These areas are hardware-independent or product logic that does not depend on

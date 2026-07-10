@@ -22,8 +22,8 @@ EXECUTION_SUCCESS_STATUSES = frozenset(
 
 
 class DeviceGateway:
-    def send(self, event):
-        """Deliver one event.
+    async def send(self, event):
+        """Deliver one event (async — a radio round-trip is I/O).
 
         Return a dict with at least:
           status     - one of GATEWAY_ALL_STATUSES

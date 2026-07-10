@@ -13,7 +13,7 @@ class Executor:
         self.journal = journal
         self.max_attempts = max_attempts
 
-    def execute(self, event):
+    async def execute(self, event):
         validate_event(event)
         event_id = event["event_id"]
         if self.journal.was_executed(event_id):
@@ -26,7 +26,7 @@ class Executor:
         last_result = None
         for attempt in range(1, self.max_attempts + 1):
             try:
-                result = self.gateway.send(event)
+                result = await self.gateway.send(event)
                 if not isinstance(result, dict):
                     raise ValueError("gateway result must be a dict")
                 status = result.get("status")
@@ -62,5 +62,10 @@ class Executor:
             "gateway_result": last_result,
         }
 
-    def execute_many(self, events):
-        return [self.execute(event) for event in events]
+    async def execute_many(self, events):
+        # A plain loop: MicroPython's compiler rejects await inside a
+        # comprehension.
+        outcomes = []
+        for event in events:
+            outcomes.append(await self.execute(event))
+        return outcomes

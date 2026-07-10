@@ -24,7 +24,7 @@ class H2Simulator(DeviceGateway):
         result.update(details)
         self._responses.append(result)
 
-    def send(self, event):
+    async def send(self, event):
         validate_event(event)
         self.commands.append(clone_json(event))
 

@@ -1,5 +1,6 @@
 """Tests for the USB-serial channel protocol (serial_channel.handle_line)."""
 
+import asyncio
 import json
 import unittest
 
@@ -40,7 +41,8 @@ def _api():
 
 
 def _roundtrip(api, request, extra_ops=None):
-    return json.loads(handle_line(api, json.dumps(request), extra_ops))
+    return json.loads(
+        asyncio.run(handle_line(api, json.dumps(request), extra_ops)))
 
 
 class HandleLineTests(unittest.TestCase):
@@ -62,12 +64,12 @@ class HandleLineTests(unittest.TestCase):
         self.assertEqual("abc", response["id"])
 
     def test_invalid_json_line(self):
-        response = json.loads(handle_line(_api(), "{not json"))
+        response = json.loads(asyncio.run(handle_line(_api(), "{not json")))
         self.assertFalse(response["ok"])
         self.assertEqual("bad_request", response["kind"])
 
     def test_non_object_request(self):
-        response = json.loads(handle_line(_api(), "[1, 2]"))
+        response = json.loads(asyncio.run(handle_line(_api(), "[1, 2]")))
         self.assertFalse(response["ok"])
         self.assertEqual("bad_request", response["kind"])
 

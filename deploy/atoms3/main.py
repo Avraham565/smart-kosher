@@ -46,7 +46,6 @@ ZIGBEE_TX_PIN = 2
 ZIGBEE_RX_PIN = 1
 ZIGBEE_BAUD = 115200
 ZIGBEE_REGISTRY = DATA_DIR + "/zigbee_devices.json"
-ZIGBEE_POLL_MS = 200
 
 # AtomS3 Lite has no PSRAM (~250KB usable heap). The journal keeps every
 # record as Python objects in RAM, so keep it small; 64 records still cover
@@ -135,13 +134,13 @@ def make_gateway(repo):
     from machine import UART
     uart = UART(ZIGBEE_UART_ID, baudrate=ZIGBEE_BAUD,
                 tx=ZIGBEE_TX_PIN, rx=ZIGBEE_RX_PIN, timeout=0)
-    return ZigbeeGateway(uart, repo, registry_path=ZIGBEE_REGISTRY)
+    return ZigbeeGateway(uart, repo, registry_path=ZIGBEE_REGISTRY), uart
 
 
 def main():
     repo     = JsonRepository(DATA_DIR)
     journal  = JsonEventJournal(repo, max_records=JOURNAL_MAX_RECORDS)
-    gateway  = make_gateway(repo)
+    gateway, zigbee_uart = make_gateway(repo)
     executor = Executor(gateway, journal)
     crud     = CrudService(repo)
     control  = ControlService(executor, repo)
@@ -184,25 +183,28 @@ def main():
         print("Smart Kosher hub API: http://{}/api/status".format(ip))
     print("free heap after boot:", gc.mem_free())
 
-    async def poll_zigbee():
-        # Drain spontaneous coordinator events (device_joined,
-        # attribute_report) between commands. gateway.send() and poll()
-        # never overlap — one cooperative loop, and send() doesn't await.
+    async def zigbee_reader():
+        # Event-driven inbound path: wakes the moment a byte arrives — no
+        # polling. Every line (ack, error, device_joined, attribute_report)
+        # goes through process_line, which resolves pending commands and
+        # updates the registry/state.
+        stream = asyncio.StreamReader(zigbee_uart)
         while True:
-            try:
-                gateway.poll()
-            except Exception as exc:
-                print("zigbee poll error:", exc)
-            await asyncio.sleep_ms(ZIGBEE_POLL_MS)
+            line = await stream.readline()
+            if line:
+                try:
+                    gateway.process_line(line)
+                except Exception as exc:
+                    print("zigbee line error:", exc)
 
     # No debug=True: HTTP request logging would interleave with the serial
     # channel's JSON lines on the shared USB CDC.
     async def run():
         server = asyncio.create_task(app.start_server(host="0.0.0.0", port=80))
-        poller = asyncio.create_task(poll_zigbee())
-        # Learn coordinator liveness for status.get; the NanoC6 booted with
-        # us (shared power), so its boot beacons may have passed already.
-        gateway.ping()
+        reader = asyncio.create_task(zigbee_reader())
+        # Heartbeat ping + fast re-probe while the link is down; its first
+        # ping also learns coordinator liveness for status.get.
+        heart = asyncio.create_task(gateway.watchdog())
         print("serial channel ready")
         await serial_channel.serve(api, device_ops())
 

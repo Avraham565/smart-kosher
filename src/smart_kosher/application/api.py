@@ -81,6 +81,14 @@ _ALLOWED_SETTINGS_KEYS = {"city", "lat", "lon", "utc_offset_minutes",
                           "in_israel", "candle_offset", "tzais_offset"}
 
 
+def _is_awaitable(value):
+    """True for coroutine objects on both runtimes: CPython coroutines
+    have __await__; MicroPython coroutines are generators (send/throw).
+    Plain data (dict/list/str/None) has neither."""
+    return (hasattr(value, "__await__")
+            or (hasattr(value, "send") and hasattr(value, "throw")))
+
+
 def _is_number(value):
     return not isinstance(value, bool) and isinstance(value, (int, float))
 
@@ -148,12 +156,13 @@ class Api:
         """Sorted op names — lets a channel offer discovery/help."""
         return sorted(self._ops)
 
-    def dispatch(self, op, params=None):
+    async def dispatch(self, op, params=None):
         """Run ``op`` with ``params`` (a dict) and return its result data.
 
-        Raises ApiError with a transport-independent ``kind`` on any
-        failure; service-level exceptions are classified here so no
-        channel needs to know them.
+        Async because device-facing ops await a radio round-trip; plain
+        sync handlers are returned as-is. Raises ApiError with a
+        transport-independent ``kind`` on any failure; service-level
+        exceptions are classified here so no channel needs to know them.
         """
         handler = self._ops.get(op)
         if handler is None:
@@ -163,7 +172,10 @@ class Api:
         if not isinstance(params, dict):
             raise ApiError(BAD_REQUEST, "params must be a JSON object")
         try:
-            return handler(params)
+            data = handler(params)
+            if _is_awaitable(data):
+                data = await data
+            return data
         except ApiError:
             raise
         except NotFoundError as exc:
@@ -225,10 +237,16 @@ class Api:
     # ── Control ───────────────────────────────────────────────────────────────
 
     def _control_send(self, params):
+        confirm_ms = params.get("confirm_ms")
+        if confirm_ms is not None and (
+                not _is_int(confirm_ms) or not 1 <= confirm_ms <= 15000):
+            raise ApiError(BAD_REQUEST,
+                           "confirm_ms must be an integer in 1..15000")
         return self._control.send(
             target_type=params.get("target_type"),
             target_id=params.get("target_id"),
             action_type=params.get("action_type"),
+            confirm_ms=confirm_ms,
         )
 
     # ── Zigbee pairing / registry ─────────────────────────────────────────────

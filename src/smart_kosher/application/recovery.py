@@ -11,13 +11,13 @@ class RecoveryService:
         self.executor = executor
         self.max_catch_up_minutes = max_catch_up_minutes
 
-    def recover(self, last_seen_exclusive, now_inclusive):
+    async def recover(self, last_seen_exclusive, now_inclusive):
         events = self.planner.events_between(
             last_seen_exclusive,
             now_inclusive,
             max_window_minutes=self.max_catch_up_minutes,
         )
-        outcomes = self.executor.execute_many(events)
+        outcomes = await self.executor.execute_many(events)
         return {
             "event_count": len(events),
             "events": events,

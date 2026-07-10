@@ -29,7 +29,7 @@ def _error(message, kind=BAD_REQUEST):
     return {"ok": False, "kind": kind, "error": message}
 
 
-def handle_line(api, line, extra_ops=None):
+async def handle_line(api, line, extra_ops=None):
     """Process one request line; returns the response as a JSON string.
 
     ``extra_ops`` maps op names to ``handler(params) -> data`` for
@@ -59,7 +59,7 @@ def handle_line(api, line, extra_ops=None):
                     raise ApiError(BAD_REQUEST, "params must be a JSON object")
                 data = extra_ops[op](params)
             else:
-                data = api.dispatch(op, params)
+                data = await api.dispatch(op, params)
             response = {"ok": True, "data": data}
         except ApiError as exc:
             response = _error(str(exc), exc.kind)
@@ -96,5 +96,5 @@ async def serve(api, extra_ops=None):
         line = line.strip()
         if not line:
             continue
-        sys.stdout.write(handle_line(api, line, extra_ops))
+        sys.stdout.write(await handle_line(api, line, extra_ops))
         sys.stdout.write("\n")

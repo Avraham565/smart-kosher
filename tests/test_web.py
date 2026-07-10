@@ -1,5 +1,6 @@
 """Tests for CrudService, ControlService, and API routes."""
 
+import asyncio
 import unittest
 
 from smart_kosher.adapters import H2Simulator, MemoryEventJournal, MemoryRepository
@@ -134,36 +135,36 @@ class TestControlService(unittest.TestCase):
     def test_send_to_endpoint_ack(self):
         repo, ctrl = self._services(["sent_to_zigbee"])
         ep = CrudService(repo).create("endpoints", _endpoint())
-        result = ctrl.send("endpoint", ep["id"], "on")
+        result = asyncio.run(ctrl.send("endpoint", ep["id"], "on"))
         self.assertEqual("executed", result["status"])
 
     def test_send_to_group_ack(self):
         repo, ctrl = self._services(["sent_to_zigbee"])
         grp = CrudService(repo).create("groups", _group())
-        result = ctrl.send("group", grp["id"], "off")
+        result = asyncio.run(ctrl.send("group", grp["id"], "off"))
         self.assertEqual("executed", result["status"])
 
     def test_unknown_target_raises(self):
         _, ctrl = self._services()
         with self.assertRaises(NotFoundError):
-            ctrl.send("endpoint", "nonexistent", "on")
+            asyncio.run(ctrl.send("endpoint", "nonexistent", "on"))
 
     def test_invalid_action_raises(self):
         repo, ctrl = self._services()
         ep = CrudService(repo).create("endpoints", _endpoint())
         with self.assertRaises(ValueError):
-            ctrl.send("endpoint", ep["id"], "dim")
+            asyncio.run(ctrl.send("endpoint", ep["id"], "dim"))
 
     def test_invalid_target_type_raises(self):
         repo, ctrl = self._services()
         ep = CrudService(repo).create("endpoints", _endpoint())
         with self.assertRaises(ValueError):
-            ctrl.send("device", ep["id"], "on")
+            asyncio.run(ctrl.send("device", ep["id"], "on"))
 
     def test_timeout_then_ack_retried(self):
         repo, ctrl = self._services(["timeout", "sent_to_zigbee"])
         ep = CrudService(repo).create("endpoints", _endpoint())
-        result = ctrl.send("endpoint", ep["id"], "toggle")
+        result = asyncio.run(ctrl.send("endpoint", ep["id"], "toggle"))
         self.assertEqual("executed", result["status"])
         self.assertEqual(2, result["attempts"])
 

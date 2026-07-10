@@ -20,15 +20,39 @@ class ControlService:
         self._executor = executor
         self._repo = repository
 
-    def send(self, target_type, target_id, action_type):
+    async def send(self, target_type, target_id, action_type,
+                   confirm_ms=None):
+        """Execute a manual action.
+
+        ``confirm_ms`` (endpoint on/off only): after the command is acked,
+        wait up to that long for the device's own attribute_report to say
+        the state actually changed — observed-state confirmation, not an
+        ack echo. Result gains a ``confirmation`` dict when requested and
+        the gateway supports it (the simulator does not).
+        """
         if target_type not in _TARGET_TO_COLLECTION:
             raise ValueError("unsupported target_type: {}".format(target_type))
         if action_type not in _VALID_ACTIONS:
             raise ValueError("unsupported action_type: {}".format(action_type))
         collection = _TARGET_TO_COLLECTION[target_type]
-        if self._repo.get_by_id(collection, target_id) is None:
+        entity = self._repo.get_by_id(collection, target_id)
+        if entity is None:
             raise NotFoundError(target_id)
-        return self._executor.execute(_build_event(target_type, target_id, action_type))
+
+        outcome = await self._executor.execute(
+            _build_event(target_type, target_id, action_type))
+
+        if (confirm_ms and target_type == "endpoint"
+                and action_type in ("on", "off")
+                and outcome.get("status") == "executed"):
+            gateway = getattr(self._executor, "gateway", None)
+            waiter = getattr(gateway, "wait_for_report", None)
+            ieee = entity.get("ieee_address")
+            if waiter is not None and ieee:
+                outcome = dict(outcome)
+                outcome["confirmation"] = await waiter(
+                    ieee, action_type == "on", confirm_ms)
+        return outcome
 
 
 def _build_event(target_type, target_id, action_type):

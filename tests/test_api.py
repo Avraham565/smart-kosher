@@ -4,6 +4,7 @@ The HTTP routes are covered end-to-end in test_routes.py; these tests pin
 the dispatch contract itself — the one the USB-serial channel will speak.
 """
 
+import asyncio
 import unittest
 
 from smart_kosher.adapters import (
@@ -17,6 +18,11 @@ from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.device_time import DeviceTimeService
 from smart_kosher.application.executor import Executor
 from smart_kosher.application.views import ViewService
+
+
+def dispatch(api, op, params=None):
+    """Sync facade over the async Api.dispatch for test brevity."""
+    return asyncio.run(api.dispatch(op, params))
 
 
 class FakeSettings:
@@ -45,7 +51,9 @@ def _api(repo=None, clock=None):
 
 def _kind(callable_, *args):
     try:
-        callable_(*args)
+        result = callable_(*args)
+        if asyncio.iscoroutine(result):
+            asyncio.run(result)
     except ApiError as exc:
         return exc.kind
     return None
@@ -61,19 +69,19 @@ class DispatchContractTests(unittest.TestCase):
         self.assertEqual(BAD_REQUEST, _kind(api.dispatch, "zones.list", []))
 
     def test_none_params_allowed(self):
-        self.assertEqual([], _api().dispatch("zones.list"))
+        self.assertEqual([], dispatch(_api(), "zones.list"))
 
     def test_crud_roundtrip(self):
         api = _api()
-        zone = api.dispatch("zones.create", {"data": {"name": "סלון"}})
+        zone = dispatch(api, "zones.create", {"data": {"name": "סלון"}})
         self.assertTrue(zone["id"].startswith("z_"))
-        listed = api.dispatch("zones.list")
+        listed = dispatch(api, "zones.list")
         self.assertEqual([zone["id"]], [z["id"] for z in listed])
-        updated = api.dispatch(
+        updated = dispatch(api, 
             "zones.update", {"id": zone["id"], "data": {"name": "מטבח"}})
         self.assertEqual("מטבח", updated["name"])
-        self.assertIsNone(api.dispatch("zones.delete", {"id": zone["id"]}))
-        self.assertEqual([], api.dispatch("zones.list"))
+        self.assertIsNone(dispatch(api, "zones.delete", {"id": zone["id"]}))
+        self.assertEqual([], dispatch(api, "zones.list"))
 
     def test_missing_entity_is_not_found(self):
         api = _api()
@@ -84,8 +92,8 @@ class DispatchContractTests(unittest.TestCase):
 
     def test_delete_zone_in_use_is_conflict(self):
         api = _api()
-        zone = api.dispatch("zones.create", {"data": {"name": "סלון"}})
-        api.dispatch("endpoints.create",
+        zone = dispatch(api, "zones.create", {"data": {"name": "סלון"}})
+        dispatch(api, "endpoints.create",
                      {"data": {"name": "אור", "zone_id": zone["id"]}})
         self.assertEqual(
             CONFLICT, _kind(api.dispatch, "zones.delete", {"id": zone["id"]}))
@@ -100,8 +108,8 @@ class DispatchContractTests(unittest.TestCase):
 
     def test_control_send_executes(self):
         api = _api()
-        ep = api.dispatch("endpoints.create", {"data": {"name": "אור"}})
-        result = api.dispatch("control.send", {
+        ep = dispatch(api, "endpoints.create", {"data": {"name": "אור"}})
+        result = dispatch(api, "control.send", {
             "target_type": "endpoint", "target_id": ep["id"],
             "action_type": "on",
         })
@@ -148,22 +156,22 @@ class ZigbeeOpsTests(unittest.TestCase):
         api = self._api(None)
         self.assertNotIn("zigbee.devices", api.ops())
         with self.assertRaises(ApiError) as ctx:
-            api.dispatch("zigbee.permit_join", {"duration": 60})
+            dispatch(api, "zigbee.permit_join", {"duration": 60})
         self.assertEqual(BAD_REQUEST, ctx.exception.kind)
 
     def test_zigbee_devices_returns_registry_view(self):
-        data = self._api(FakeZigbee()).dispatch("zigbee.devices", {})
+        data = dispatch(self._api(FakeZigbee()), "zigbee.devices", {})
         self.assertIn("a4:c1:38:6b:47:9d:c2:55", data)
         self.assertTrue(data["a4:c1:38:6b:47:9d:c2:55"]["on_off"])
 
     def test_permit_join_defaults_and_validates_duration(self):
         zigbee = FakeZigbee()
         api = self._api(zigbee)
-        api.dispatch("zigbee.permit_join", {})
+        dispatch(api, "zigbee.permit_join", {})
         self.assertEqual([180], zigbee.permit_calls)
         for bad in (0, 255, "60", True, -1):
             with self.assertRaises(ApiError):
-                api.dispatch("zigbee.permit_join", {"duration": bad})
+                dispatch(api, "zigbee.permit_join", {"duration": bad})
 
 
 class FakeClock:

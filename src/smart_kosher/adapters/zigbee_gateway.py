@@ -11,15 +11,22 @@ stateless execution arm; this adapter owns the device registry, keyed by
 the stable ieee address. short_addr changes on rejoin, so the registry is
 healed from every device_joined event, not only during pairing.
 
-Threading model: the hub runs one cooperative asyncio loop. ``poll()``
-drains spontaneous events and is called from a periodic task; ``send()``
-writes a command and reads inline until its ack (processing any events it
-meets on the way). The two never run concurrently, so no locking is
-needed — but send() does block the loop for up to its timeout, which is
-acceptable at pilot scale (acks measured well under a second on hardware).
+Fully event-driven — no polling sleeps anywhere:
 
-The UART object is duck-typed (``read(n)``/``write(bytes)``): the device
-passes ``machine.UART``, tests pass a fake.
+  - Inbound: the device entry point runs one reader task
+    (``asyncio.StreamReader(uart).readline()``) and hands every line to
+    ``process_line()``; tests call it directly.
+  - Outbound: ``send()`` registers an ``asyncio.Event`` per request_id and
+    awaits it; ``process_line()`` sets it the moment the matching ack (or
+    error) frame arrives. Latency is the radio round-trip, nothing more,
+    and the shared loop stays free while a command is in flight.
+  - Circuit breaker: consecutive ack timeouts mark the coordinator down
+    and commands fail fast (status "error", no UART wait) until any valid
+    inbound frame proves the link again; ``watchdog()`` pings to re-probe.
+  - Toggle uses the live reported state when known (one round-trip) and
+    falls back to read_attr when it is not.
+  - ``wait_for_report()`` exposes observed-state confirmation: the next
+    attribute_report is the device's own word that the state changed.
 """
 
 try:
@@ -27,8 +34,10 @@ try:
 except ImportError:
     import json
 
+import asyncio
+
 try:
-    from time import sleep_ms, ticks_add, ticks_diff, ticks_ms
+    from time import ticks_add, ticks_diff, ticks_ms
 except ImportError:  # CPython
     import time as _time
 
@@ -41,17 +50,16 @@ except ImportError:  # CPython
     def ticks_diff(a, b):
         return a - b
 
-    def sleep_ms(ms):
-        _time.sleep(ms / 1000.0)
-
 from ..ports.device_gateway import DeviceGateway
 from .uart_codec import decode as uart_decode
 from .uart_codec import encode as uart_encode
 
-_MAX_LINE = 512          # coordinator firmware MAX_LINE
-_READ_CHUNK = 256        # explicit size: uart.read() without one can block
-_DEFAULT_ACK_TIMEOUT_MS = 5000
-_POLL_SLEEP_MS = 20
+# Acks measured well under 500ms on hardware; 1500ms already means the
+# command is lost (coordinator restarts take longer than any retry helps).
+_DEFAULT_ACK_TIMEOUT_MS = 1500
+_BREAKER_THRESHOLD = 2          # consecutive timeouts before failing fast
+_WATCHDOG_UP_MS = 30000         # heartbeat ping interval while link is up
+_WATCHDOG_DOWN_MS = 2000        # re-probe interval while link is down
 
 
 class ZigbeeGateway(DeviceGateway):
@@ -62,12 +70,26 @@ class ZigbeeGateway(DeviceGateway):
         self._registry_path = registry_path
         self._ack_timeout_ms = ack_timeout_ms
         self._log = log
-        self._buf = b""
         self._seq = 0
+        # rid -> [asyncio.Event, reply-or-None]
+        self._pending = {}
         # ieee -> {"short_addr": str, "endpoint": int, "reporting": bool}
         self._registry = self._load_registry()
-        # ieee -> True/False, from attribute_report and read_attr acks
+        # ieee -> bool, from attribute_report and read_attr acks
         self._states = {}
+        self._state_ms = {}
+        # ieee -> [asyncio.Event, ...] — observed-state waiters
+        self._state_waiters = {}
+        # circuit breaker — moved ONLY by ping outcomes: a device that
+        # dropped off the mesh times out too, and must not be mistaken
+        # for a dead coordinator link.
+        self._ping_timeouts = 0
+        self._down = False
+        self._probe_inflight = False
+        # ieee -> True when a command to the device timed out while the
+        # coordinator link was fine (classic stale-short_addr rejoin);
+        # cleared by any report/rejoin from the device.
+        self._suspect = {}
         # coordinator liveness, learned from boot/ping/network_formed
         self.info = {"network_up": None, "firmware_version": None,
                      "target": None}
@@ -102,47 +124,48 @@ class ZigbeeGateway(DeviceGateway):
             item = dict(entry)
             if ieee in self._states:
                 item["on_off"] = self._states[ieee]
+                item["state_age_ms"] = ticks_diff(
+                    ticks_ms(), self._state_ms[ieee])
+            if self._suspect.get(ieee):
+                item["unreachable"] = True
             out[ieee] = item
         return out
 
     def status_info(self):
-        info = {"gateway": "zigbee", "devices": len(self._registry)}
+        info = {"gateway": "zigbee", "devices": len(self._registry),
+                "link_down": self._down}
         info.update(self.info)
         return info
 
-    # ── inbound: events and stray acks ─────────────────────────────────
+    # ── inbound: one line at a time, from the reader task ──────────────
 
-    def poll(self):
-        """Drain waiting UART lines; returns how many messages were handled.
-
-        Call periodically from the shared asyncio loop so spontaneous
-        events (device_joined, attribute_report) are consumed even when no
-        command is in flight.
-        """
-        handled = 0
-        for msg in self._read_lines():
-            self._handle_async(msg)
-            handled += 1
-        return handled
-
-    def _read_lines(self):
-        chunk = self._uart.read(_READ_CHUNK)
-        while chunk:
-            self._buf += chunk
-            chunk = self._uart.read(_READ_CHUNK)
-        while b"\n" in self._buf:
-            line, self._buf = self._buf.split(b"\n", 1)
-            line = line.strip()
+    def process_line(self, line):
+        """Decode and handle one inbound UART line; safe to call with
+        console noise (skipped). Returns True when a frame was handled."""
+        if isinstance(line, (bytes, bytearray)):
+            line = bytes(line).strip()
             if not line:
-                continue
-            try:
-                yield uart_decode(line)
-            except ValueError:
-                # console noise / corrupt frame — protocol says skip
-                continue
-        if len(self._buf) > _MAX_LINE * 4:
-            # a newline-free flood (e.g. wrong baud) — don't eat the heap
-            self._buf = b""
+                return False
+        try:
+            msg = uart_decode(line)
+        except ValueError:
+            return False
+
+        # Any valid frame proves the link — reset the breaker.
+        self._ping_timeouts = 0
+        if self._down:
+            self._down = False
+            self._log("zigbee link restored")
+
+        rid = msg.get("request_id")
+        if rid and rid in self._pending and \
+                msg.get("type") in ("ack", "error"):
+            slot = self._pending[rid]
+            slot[1] = msg
+            slot[0].set()
+
+        self._handle_async(msg)
+        return True
 
     def _handle_async(self, msg):
         mtype = msg.get("type")
@@ -186,28 +209,59 @@ class ZigbeeGateway(DeviceGateway):
             self._registry[ieee] = entry
         entry["short_addr"] = short
         entry["endpoint"] = payload.get("endpoint", entry.get("endpoint", 1))
+        self._suspect.pop(ieee, None)  # fresh address — reachable again
         self._save_registry()
         self._log("zigbee device", "joined:" if first_join else "rejoined:",
                   ieee, short)
-        # Rejoin invalidates the device's binding-independent config only
-        # rarely, but reporting is cheap to (re)request and idempotent.
-        self._request_reporting(short, entry["endpoint"])
-
-    def _request_reporting(self, short, endpoint):
         # Fire and forget: the reporting_configured event flips the flag.
+        # Reporting is cheap to (re)request and idempotent.
         self._write_cmd("enable_reporting",
-                        {"short_addr": short, "endpoint": endpoint})
+                        {"short_addr": short, "endpoint": entry["endpoint"]})
 
     def _on_state(self, payload):
         ieee = self._ieee_for_short(payload.get("short_addr"))
-        if ieee and "on_off" in payload:
-            self._states[ieee] = bool(payload["on_off"])
+        if not ieee or "on_off" not in payload:
+            return
+        self._states[ieee] = bool(payload["on_off"])
+        self._state_ms[ieee] = ticks_ms()
+        self._suspect.pop(ieee, None)  # it spoke — clearly reachable
+        for evt in self._state_waiters.pop(ieee, []):
+            evt.set()
 
     def _ieee_for_short(self, short):
         for ieee, entry in self._registry.items():
             if entry.get("short_addr") == short:
                 return ieee
         return None
+
+    # ── observed-state confirmation (ACK level 4) ──────────────────────
+
+    async def wait_for_report(self, ieee, expect, timeout_ms):
+        """Await attribute_report(s) from ``ieee`` until one says
+        ``expect`` or the timeout passes. Returns a confirmation dict —
+        this is the device's own word, not an ack echo.
+
+        The current state is checked before each wait: the report often
+        lands in the same burst as the command's ack, i.e. before the
+        caller starts waiting, and must still count."""
+        deadline = ticks_add(ticks_ms(), timeout_ms)
+        while True:
+            if self._states.get(ieee) == expect:
+                return {"confirmed": True, "observed": expect}
+            remaining = ticks_diff(deadline, ticks_ms())
+            if remaining <= 0:
+                return {"confirmed": False,
+                        "observed": self._states.get(ieee)}
+            evt = asyncio.Event()
+            self._state_waiters.setdefault(ieee, []).append(evt)
+            try:
+                await asyncio.wait_for(evt.wait(), remaining / 1000)
+            except asyncio.TimeoutError:
+                waiters = self._state_waiters.get(ieee, [])
+                if evt in waiters:
+                    waiters.remove(evt)
+                return {"confirmed": False,
+                        "observed": self._states.get(ieee)}
 
     # ── outbound: commands with ack correlation ────────────────────────
 
@@ -224,40 +278,72 @@ class ZigbeeGateway(DeviceGateway):
         self._uart.write(uart_encode(msg))
         return rid
 
-    def _await_ack(self, rid, op, timeout_ms=None):
-        """Read until the ack/error for ``rid`` arrives; events met on the
-        way are handled normally so a rejoin during a command still heals
-        the registry."""
-        if timeout_ms is None:
-            timeout_ms = self._ack_timeout_ms
-        deadline = ticks_add(ticks_ms(), timeout_ms)
-        while ticks_diff(deadline, ticks_ms()) > 0:
-            for msg in self._read_lines():
-                self._handle_async(msg)
-                if msg.get("request_id") != rid:
-                    continue
-                if msg.get("type") == "ack" and msg.get("op") == op:
-                    return msg
-                if msg.get("type") == "error":
-                    return msg
-            sleep_ms(_POLL_SLEEP_MS)
-        return None
-
-    def _command(self, op, payload, rid=None, timeout_ms=None):
-        rid = self._write_cmd(op, payload, rid)
-        reply = self._await_ack(rid, op, timeout_ms)
-        if reply is None:
+    async def _command(self, op, payload, rid=None, timeout_ms=None):
+        if self._down:
+            return {"status": "error", "error": "coordinator_down",
+                    "command_id": rid or op}
+        if rid is None:
+            rid = self._next_rid(op)
+        evt = asyncio.Event()
+        self._pending[rid] = [evt, None]
+        self._write_cmd(op, payload, rid)
+        try:
+            await asyncio.wait_for(
+                evt.wait(),
+                (timeout_ms or self._ack_timeout_ms) / 1000)
+        except asyncio.TimeoutError:
+            self._pending.pop(rid, None)
+            if op == "ping":
+                self._ping_timeouts += 1
+                if self._ping_timeouts >= _BREAKER_THRESHOLD \
+                        and not self._down:
+                    self._down = True
+                    self._log("zigbee link down (no acks) - failing fast")
+            else:
+                # A device command timing out is ambiguous: dead link or
+                # dead device. Let a ping decide — only its verdict moves
+                # the breaker.
+                self._probe_link()
             return {"status": "timeout", "command_id": rid}
+        reply = self._pending.pop(rid)[1]
         if reply.get("type") == "error":
-            code = (reply.get("payload") or {}).get("code", "coordinator_error")
+            code = (reply.get("payload") or {}).get("code",
+                                                    "coordinator_error")
             return {"status": "error", "error": code, "command_id": rid}
-        result = {"status": "sent_to_zigbee", "command_id": rid}
-        result["reply"] = reply.get("payload") or {}
-        return result
+        return {"status": "sent_to_zigbee", "command_id": rid,
+                "reply": reply.get("payload") or {}}
+
+    def _probe_link(self):
+        """Fire one background ping to classify a command timeout. At most
+        one probe in flight — a burst of timeouts must not ping-storm."""
+        if self._probe_inflight or self._down:
+            return
+
+        async def probe():
+            try:
+                await self.ping()
+            finally:
+                self._probe_inflight = False
+
+        self._probe_inflight = True
+        try:
+            asyncio.create_task(probe())
+        except Exception:
+            self._probe_inflight = False
+
+    async def watchdog(self):
+        """Heartbeat task: slow pings while the link is up, fast re-probes
+        while it is down. The ping's ack (like any inbound frame) clears
+        the breaker."""
+        while True:
+            await self.ping()
+            await asyncio.sleep(
+                (_WATCHDOG_DOWN_MS if self._down else _WATCHDOG_UP_MS)
+                / 1000)
 
     # ── DeviceGateway contract ─────────────────────────────────────────
 
-    def send(self, event):
+    async def send(self, event):
         """Deliver one planner/manual event. Never raises on delivery
         problems — returns a retryable status instead (Executor decides)."""
         target_type = event.get("target_type")
@@ -266,21 +352,27 @@ class ZigbeeGateway(DeviceGateway):
         event_id = event.get("event_id", "")
 
         try:
-            endpoints = self._resolve_targets(target_type, target_id)
+            targets = self._resolve_targets(target_type, target_id)
         except ValueError as exc:
             return {"status": "error", "error": str(exc),
                     "command_id": event_id}
 
         results = []
-        for n, (short, zcl_ep) in enumerate(endpoints):
-            rid = "{}-{}".format(event_id, n) if len(endpoints) > 1 else event_id
+        for n, (ieee, short, zcl_ep) in enumerate(targets):
+            rid = "{}-{}".format(event_id, n) if len(targets) > 1 else event_id
             if action == "toggle":
-                results.append(self._toggle(short, zcl_ep, rid))
+                result = await self._toggle(ieee, short, zcl_ep, rid)
             else:
-                results.append(self._command(
+                result = await self._command(
                     "on_off",
-                    {"state": action, "short_addr": short, "endpoint": zcl_ep},
-                    rid=rid))
+                    {"state": action, "short_addr": short,
+                     "endpoint": zcl_ep},
+                    rid=rid)
+            if result["status"] == "timeout" and not self._down:
+                # Coordinator link looks fine but this device is silent —
+                # the classic stale short_addr after an unseen rejoin.
+                self._suspect[ieee] = True
+            results.append(result)
 
         worst = _worst_status(results)
         outcome = {"status": worst, "command_id": event_id}
@@ -289,26 +381,28 @@ class ZigbeeGateway(DeviceGateway):
             outcome["error"] = "; ".join(errors)
         return outcome
 
-    def _toggle(self, short, zcl_ep, rid):
-        """Manual-only toggle = read current state, send the opposite.
-
-        Two round-trips, deliberately non-atomic (arch decision) — which
-        is exactly why the domain layer already bans toggle in schedules.
-        """
-        read = self._command(
-            "read_attr", {"short_addr": short, "endpoint": zcl_ep},
-            rid=rid + "-r")
-        if read["status"] != "sent_to_zigbee":
-            return read
-        current = bool(read.get("reply", {}).get("on_off"))
-        return self._command(
+    async def _toggle(self, ieee, short, zcl_ep, rid):
+        """Manual-only toggle. Attribute reporting keeps ``_states`` live,
+        so the common case flips the last reported state in one round-trip;
+        read_attr is only the cold-cache fallback. Still deliberately
+        non-atomic (arch decision) — which is exactly why the domain layer
+        bans toggle in schedules."""
+        current = self._states.get(ieee)
+        if current is None:
+            read = await self._command(
+                "read_attr", {"short_addr": short, "endpoint": zcl_ep},
+                rid=rid + "-r")
+            if read["status"] != "sent_to_zigbee":
+                return read
+            current = bool(read.get("reply", {}).get("on_off"))
+        return await self._command(
             "on_off",
             {"state": "off" if current else "on",
              "short_addr": short, "endpoint": zcl_ep},
             rid=rid)
 
     def _resolve_targets(self, target_type, target_id):
-        """Map an event target to [(short_addr, zcl_endpoint), ...]."""
+        """Map an event target to [(ieee, short_addr, zcl_endpoint), ...]."""
         if target_type == "endpoint":
             return [self._resolve_endpoint(target_id)]
         if target_type == "group":
@@ -335,30 +429,41 @@ class ZigbeeGateway(DeviceGateway):
             raise ValueError(
                 "device {} not in zigbee registry (never joined)".format(ieee))
         zcl_ep = entity.get("zigbee_endpoint", entry.get("endpoint", 1))
-        return entry["short_addr"], zcl_ep
+        return ieee, entry["short_addr"], zcl_ep
+
+    def ieee_of(self, endpoint_id):
+        """Stable radio identity of an endpoint entity, or None."""
+        entity = self._repo.get_by_id("endpoints", endpoint_id)
+        return entity.get("ieee_address") if entity else None
 
     # ── pairing / maintenance ops (exposed via Api) ────────────────────
 
-    def ping(self):
-        return self._command("ping", None)
+    async def ping(self):
+        # The watchdog's re-probe must reach the wire even while the
+        # breaker is open, so bypass the fail-fast check in _command.
+        was_down, self._down = self._down, False
+        result = await self._command("ping", None)
+        if result["status"] != "sent_to_zigbee" and was_down:
+            self._down = True
+        return result
 
-    def permit_join(self, duration):
-        return self._command("permit_join", {"duration": duration})
+    async def permit_join(self, duration):
+        return await self._command("permit_join", {"duration": duration})
 
-    def read_state(self, ieee):
+    async def read_state(self, ieee):
         entry = self._registry.get(ieee)
         if entry is None:
             return {"status": "error", "error": "unknown device",
                     "command_id": ""}
-        result = self._command(
+        return await self._command(
             "read_attr",
             {"short_addr": entry["short_addr"],
              "endpoint": entry.get("endpoint", 1)})
-        return result
 
     def forget_device(self, ieee):
         entry = self._registry.pop(ieee, None)
         self._states.pop(ieee, None)
+        self._state_ms.pop(ieee, None)
         self._save_registry()
         if entry is None:
             return {"removed": False}
