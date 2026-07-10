@@ -71,6 +71,25 @@ async def handle_line(api, line, extra_ops=None):
     return json.dumps(response)
 
 
+# The USB-Serial/JTAG console is lossy: when a write outruns its small TX
+# ring buffer, MicroPython DROPS the excess bytes rather than block. A big
+# response (a grown schedules list) came out with a hole in the middle,
+# the client could not parse it, and every request after an "add" hung to
+# its timeout. Write in small chunks and yield so the host drains the
+# buffer between them.
+_WRITE_CHUNK = 64
+_WRITE_PAUSE_S = 0.004
+
+
+async def _write_response(out, text):
+    import asyncio
+
+    for i in range(0, len(text), _WRITE_CHUNK):
+        out.write(text[i:i + _WRITE_CHUNK])
+        await asyncio.sleep(_WRITE_PAUSE_S)
+    out.write("\n")
+
+
 async def serve(api, extra_ops=None):
     """Read requests from the USB CDC forever (device-side loop).
 
@@ -96,5 +115,5 @@ async def serve(api, extra_ops=None):
         line = line.strip()
         if not line:
             continue
-        sys.stdout.write(await handle_line(api, line, extra_ops))
-        sys.stdout.write("\n")
+        await _write_response(sys.stdout,
+                              await handle_line(api, line, extra_ops))

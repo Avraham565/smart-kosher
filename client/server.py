@@ -12,6 +12,7 @@ Runs on 127.0.0.1 only. Endpoints:
 """
 
 import json
+import os
 import threading
 import time
 import urllib.parse
@@ -116,9 +117,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
     def _serve_ui(self, path):
         name = "index.html" if path == "/" else path[len("/static/"):]
-        if "/" in name or "\\" in name or ".." in name:
+        # Subdirectories are allowed (the UI ships as js/ modules); path
+        # traversal and absolute paths are not.
+        if "\\" in name or ".." in name or name.startswith("/") or not name:
             return self._send_json(404, {"ok": False, "error": "not found"})
-        full = self.server.ui_dir + "/" + name
+        full = os.path.realpath(os.path.join(self.server.ui_dir, name))
+        root = os.path.realpath(self.server.ui_dir)
+        if not full.startswith(root + os.sep):
+            return self._send_json(404, {"ok": False, "error": "not found"})
         ext = "." + name.rsplit(".", 1)[-1]
         try:
             with open(full, "rb") as f:

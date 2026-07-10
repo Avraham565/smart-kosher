@@ -41,6 +41,13 @@ class LinkError(Exception):
     """Transport failure (port gone, host unreachable, timeout)."""
 
 
+def _is_idempotent(op_name):
+    """Safe to resend when the response was lost. Creates would duplicate
+    the entity and control.send would re-fire the action, so they get no
+    retry; everything else is a read or an idempotent write."""
+    return not (op_name.endswith(".create") or op_name == "control.send")
+
+
 def find_device_ports():
     """COM ports that look like the hub, most recently attached first."""
     matches = []
@@ -135,19 +142,30 @@ class SerialLink:
     def describe(self):
         return {"mode": "serial", "port": self.port}
 
-    def op(self, op_name, params=None, timeout_s=10.0):
+    def op(self, op_name, params=None, timeout_s=4.0, retries=None):
         """Send one op, return the hub's response dict (ok/data/error/kind).
 
         Console lines (boot noise, tracebacks) interleave with protocol
         lines on the CDC, so everything that is not our response is
-        skipped.
+        skipped. A response can also arrive corrupted (the hub's console
+        is lossy under pressure), so idempotent ops get one retry instead
+        of surfacing a long hang to the UI.
         """
-        request = {"op": op_name, "id": self._next_id}
-        self._next_id += 1
-        if params is not None:
-            request["params"] = params
-        line = json.dumps(request) + "\n"
+        if retries is None:
+            retries = 1 if _is_idempotent(op_name) else 0
+        for attempt in range(retries + 1):
+            response = self._op_once(op_name, params, timeout_s)
+            if response is not None:
+                return response
+        raise LinkError("device did not answer op {}".format(op_name))
+
+    def _op_once(self, op_name, params, timeout_s):
         with self._lock:
+            request = {"op": op_name, "id": self._next_id}
+            self._next_id += 1
+            if params is not None:
+                request["params"] = params
+            line = json.dumps(request) + "\n"
             try:
                 self._serial.write(line.encode("utf-8"))
                 deadline = time.time() + timeout_s
@@ -164,7 +182,7 @@ class SerialLink:
                         return response
             except (serial.SerialException, OSError) as exc:
                 raise LinkError("serial link lost: {}".format(exc))
-        raise LinkError("device did not answer op {}".format(op_name))
+        return None
 
     def rest(self, method, path, query, body):
         translated = rest_to_op(method, path, query, body)
