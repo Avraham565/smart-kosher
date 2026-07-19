@@ -242,6 +242,8 @@ void app_main(void)
     esp_lcd_panel_handle_t panel = init_rgb_panel();
     esp_lcd_touch_handle_t touch = init_touch();
 
+    /* Default affinity: pinning LVGL to core 1 while the panel ISRs live on
+     * core 0 corrupted scrolling in direct mode — keep them together. */
     const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     ESP_ERROR_CHECK(lvgl_port_init(&port_cfg));
 

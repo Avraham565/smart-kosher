@@ -25,6 +25,16 @@ CONFIG_FREERTOS_HZ=1000
 # Extra safety net from esp_lcd: realign DMA at each vsync if it ever slips
 CONFIG_LCD_RGB_RESTART_IN_VSYNC=y
 
+# --- Performance notes (tried per esp_lvgl_port docs/performance.md) ---
+# Verified-stable baseline is the LVGL defaults (33ms refresh). Deltas tested
+# on 2026-07-18 and REVERTED after left-edge jitter with direct_mode dual-FB:
+#   CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
+#   CONFIG_LV_DEF_REFR_PERIOD=10
+#   CONFIG_LV_USE_SYSMON=y + CONFIG_LV_USE_PERF_MONITOR=y (overlay itself
+#   repaints constantly — retest flags ONE AT A TIME if smoothness is needed)
+# esp_lvgl_port's custom SIMD blend is only for LVGL 9.1.x (upstreamed into
+# LVGL since 9.2) — never enable LV_DRAW_SW_ASM_CUSTOM here.
+
 # --- LVGL (managed component, configured via Kconfig) ---
 CONFIG_LV_COLOR_DEPTH_16=y
 # Hebrew / RTL

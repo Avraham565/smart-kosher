@@ -14,7 +14,8 @@ BUILD_DIR="$HOME/panel_a_build"
 IDF="${1:-$HOME/lvgl_micropython/lib/esp-idf}"   # any clean v5.3+ checkout
 
 rsync -a --delete \
-    --exclude build/ --exclude build_out/ --exclude sdkconfig.old \
+    --exclude build/ --exclude build_out/ \
+    --exclude sdkconfig --exclude sdkconfig.old \
     "$REPO_PANEL/" "$BUILD_DIR/"
 
 source "$IDF/export.sh" > /dev/null
