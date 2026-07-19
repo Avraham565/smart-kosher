@@ -26,6 +26,7 @@
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "fonts/fonts.h"
 
 static const char *TAG = "panel_a";
 
@@ -162,10 +163,10 @@ static void build_ui(lv_display_t *disp)
     lv_obj_set_style_base_dir(scr, LV_BASE_DIR_RTL, LV_PART_MAIN);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    const lv_font_t *heb = &lv_font_dejavu_16_persian_hebrew;
+    const lv_font_t *heb = &assistant_20;
 
     lv_obj_t *title = lv_label_create(scr);
-    lv_obj_set_style_text_font(title, heb, LV_PART_MAIN);
+    lv_obj_set_style_text_font(title, &assistant_sb_28, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
     lv_label_set_text(title, "שלום עולם — פאנל C לפי תיעוד רשמי");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
