@@ -35,6 +35,17 @@ CONFIG_LCD_RGB_RESTART_IN_VSYNC=y
 # esp_lvgl_port's custom SIMD blend is only for LVGL 9.1.x (upstreamed into
 # LVGL since 9.2) — never enable LV_DRAW_SW_ASM_CUSTOM here.
 
+# FPS overlay — single-variable experiment (2026-07-19): meter ONLY, refresh
+# stays at default 33ms. Remove before production.
+CONFIG_LV_USE_SYSMON=y
+CONFIG_LV_USE_PERF_MONITOR=y
+# Log mode: numbers go to serial, nothing is drawn on screen (the on-screen
+# overlay itself flickered in direct_mode — observed on hardware 2026-07-19)
+CONFIG_LV_USE_PERF_MONITOR_LOG_MODE=y
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_INFO=y
+CONFIG_LV_LOG_PRINTF=y
+
 # --- LVGL (managed component, configured via Kconfig) ---
 CONFIG_LV_COLOR_DEPTH_16=y
 # Hebrew / RTL
