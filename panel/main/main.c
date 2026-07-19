@@ -27,6 +27,8 @@
 #include "esp_log.h"
 #include "lvgl.h"
 #include "fonts/fonts.h"
+#include "ui/ui_home.h"
+#include "ui/link.h"
 
 static const char *TAG = "panel_a";
 
@@ -144,89 +146,6 @@ static esp_lcd_touch_handle_t init_touch(void)
     return tp;
 }
 
-/* ------------------------------------------------------------------ */
-/* Hebrew hello screen (validation UI, mirrors the MicroPython probe)  */
-/* ------------------------------------------------------------------ */
-static void button_cb(lv_event_t *e)
-{
-    static int clicks = 0;
-    lv_obj_t *label = lv_event_get_user_data(e);
-    lv_label_set_text_fmt(label, "נלחץ! %d", ++clicks);
-}
-
-static void build_ui(lv_display_t *disp)
-{
-    lvgl_port_lock(0);
-
-    lv_obj_t *scr = lv_display_get_screen_active(disp);
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x0D0D1A), LV_PART_MAIN);
-    lv_obj_set_style_base_dir(scr, LV_BASE_DIR_RTL, LV_PART_MAIN);
-    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-
-    const lv_font_t *heb = &assistant_20;
-
-    lv_obj_t *title = lv_label_create(scr);
-    lv_obj_set_style_text_font(title, &assistant_sb_28, LV_PART_MAIN);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_label_set_text(title, "שלום עולם — פאנל C לפי תיעוד רשמי");
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
-
-    lv_obj_t *mixed = lv_label_create(scr);
-    lv_obj_set_style_text_font(mixed, heb, LV_PART_MAIN);
-    lv_obj_set_style_text_color(mixed, lv_color_hex(0x7EC8E3), LV_PART_MAIN);
-    lv_label_set_text(mixed, "3 דולקים מתוך 5 מכשירים");
-    lv_obj_align(mixed, LV_ALIGN_TOP_MID, 0, 46);
-
-    /* RTL scrollable device list — the exact scenario that broke MicroPython */
-    lv_obj_t *panel = lv_obj_create(scr);
-    lv_obj_set_size(panel, 720, 270);
-    lv_obj_set_pos(panel, 40, 84);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(0x0A0A14), LV_PART_MAIN);
-    lv_obj_set_style_border_width(panel, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(panel, 12, LV_PART_MAIN);
-    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_scroll_dir(panel, LV_DIR_VER);
-
-    static const char *names[] = {
-        "דוד שמש", "מזגן סלון", "תאורת חדר מדרגות", "פלטת שבת",
-        "מיחם", "מזגן חדר שינה", "תאורת חצר", "ונטה אמבטיה",
-    };
-    for (int i = 0; i < 8; i++) {
-        lv_obj_t *row = lv_obj_create(panel);
-        lv_obj_set_size(row, LV_PCT(100), 56);
-        lv_obj_set_style_bg_color(row, lv_color_hex(0x16213E), LV_PART_MAIN);
-        lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
-        lv_obj_set_style_radius(row, 10, LV_PART_MAIN);
-        lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-        lv_obj_t *name = lv_label_create(row);
-        lv_obj_set_style_text_font(name, heb, LV_PART_MAIN);
-        lv_obj_set_style_text_color(name, lv_color_hex(0xEEEEEE), LV_PART_MAIN);
-        lv_label_set_text(name, names[i]);
-        lv_obj_align(name, LV_ALIGN_RIGHT_MID, 0, 0);
-
-        lv_obj_t *state = lv_label_create(row);
-        lv_obj_set_style_text_font(state, heb, LV_PART_MAIN);
-        bool on = (i % 2) == 0;
-        lv_obj_set_style_text_color(
-            state, lv_color_hex(on ? 0xFFB300 : 0x667788), LV_PART_MAIN);
-        lv_label_set_text(state, on ? "דולק" : "כבוי");
-        lv_obj_align(state, LV_ALIGN_LEFT_MID, 0, 0);
-    }
-
-    lv_obj_t *btn = lv_button_create(scr);
-    lv_obj_set_size(btn, 220, 72);
-    lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -20);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x0F3460), LV_PART_MAIN);
-    lv_obj_t *btn_label = lv_label_create(btn);
-    lv_obj_set_style_text_font(btn_label, heb, LV_PART_MAIN);
-    lv_label_set_text(btn_label, "לחץ עליי");
-    lv_obj_center(btn_label);
-    lv_obj_add_event_cb(btn, button_cb, LV_EVENT_CLICKED, btn_label);
-
-    lvgl_port_unlock();
-}
-
 void app_main(void)
 {
     i2c_master_bus_config_t bus_cfg = {
@@ -277,6 +196,10 @@ void app_main(void)
     };
     lvgl_port_add_touch(&touch_cfg);
 
-    build_ui(disp);
+    lvgl_port_lock(0);
+    ui_home_create(disp);
+    lvgl_port_unlock();
+
+    link_init();
     ESP_LOGI(TAG, "UI up — LVGL %d.%d", lv_version_major(), lv_version_minor());
 }
