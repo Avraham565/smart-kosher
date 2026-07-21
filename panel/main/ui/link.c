@@ -6,6 +6,8 @@
 #include "driver/uart.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "soc/usb_serial_jtag_reg.h"
+#include "soc/soc.h"
 
 #include "theme.h"
 #include "ui_home.h"
@@ -18,42 +20,66 @@ static const char *TAG = "link";
 #define LINK_BAUD 115200
 #define RX_BUF_SIZE 2048
 
-static void link_task(void *arg)
+/* One send/receive round. Returns true when our frame came back intact. */
+static bool loop_round(uint32_t seq)
 {
     char tx_frame[32];
     uint8_t rx_buf[64];
+
+    int len = snprintf(tx_frame, sizeof(tx_frame), "SKLOOP %lu\n",
+                       (unsigned long)seq);
+    uart_flush_input(LINK_UART);
+    uart_write_bytes(LINK_UART, tx_frame, len);
+
+    int got = uart_read_bytes(LINK_UART, rx_buf, len, pdMS_TO_TICKS(200));
+    return got == len && memcmp(rx_buf, tx_frame, len) == 0;
+}
+
+static void link_task(void *arg)
+{
     uint32_t seq = 0;
     int ok_streak = 0;
     bool reported_ok = false;
 
-    while (true) {
-        int len = snprintf(tx_frame, sizeof(tx_frame), "SKLOOP %lu\n",
-                           (unsigned long)++seq);
-        uart_flush_input(LINK_UART);
-        uart_write_bytes(LINK_UART, tx_frame, len);
+    /* Phase 0 — the test tests itself: internal loopback inside the chip,
+     * no wiring involved. Proves driver + framing code end-to-end. */
+    ESP_ERROR_CHECK(uart_set_loop_back(LINK_UART, true));
+    bool self_ok = false;
+    for (int i = 0; i < 5 && !self_ok; i++) {
+        self_ok = loop_round(++seq);
+    }
+    ESP_ERROR_CHECK(uart_set_loop_back(LINK_UART, false));
+    ESP_LOGI(TAG, "internal self-test: %s", self_ok ? "PASS" : "FAIL");
 
-        int got = uart_read_bytes(LINK_UART, rx_buf, sizeof(rx_buf) - 1,
-                                  pdMS_TO_TICKS(200));
-        bool echoed = got >= len && memcmp(rx_buf, tx_frame, len) == 0;
+    lvgl_port_lock(0);
+    if (self_ok) {
+        ui_home_set_status("ממתין לחיבור למוח הבית…", TH_BLUE);
+    } else {
+        ui_home_set_status("✗ בדיקה עצמית נכשלה — באג בקוד הקו", TH_DANGER);
+    }
+    lvgl_port_unlock();
+
+    while (true) {
+        bool echoed = loop_round(++seq);
 
         if (echoed) {
             ok_streak++;
             if (ok_streak >= 3 && !reported_ok) {
                 reported_ok = true;
-                ESP_LOGI(TAG, "loopback OK (streak %d)", ok_streak);
+                ESP_LOGI(TAG, "hub link up (streak %d)", ok_streak);
                 lvgl_port_lock(0);
-                ui_home_set_status("✓ קו UART תקין — הגשר עובד", TH_SUCCESS);
+                ui_home_set_status("✓ מחובר למוח הבית", TH_SUCCESS);
                 lvgl_port_unlock();
             }
         } else {
             if (reported_ok || ok_streak > 0) {
-                ESP_LOGI(TAG, "loopback lost");
+                ESP_LOGI(TAG, "hub link lost");
             }
             ok_streak = 0;
             if (reported_ok) {
                 reported_ok = false;
                 lvgl_port_lock(0);
-                ui_home_set_status("הקו נותק — בדוק את הגשר", TH_AMBER);
+                ui_home_set_status("החיבור למוח הבית נותק", TH_AMBER);
                 lvgl_port_unlock();
             }
         }
@@ -63,6 +89,13 @@ static void link_task(void *arg)
 
 void link_init(void)
 {
+    /* GPIO19/20 are the S3's native USB D-/D+ pads. The CrowPanel routes
+     * them to UART1-OUT instead (console is on the CH340), but the
+     * USB-Serial-JTAG peripheral claims the pads by default — release
+     * them so the UART matrix owns the pins cleanly. */
+    CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG,
+                        USB_SERIAL_JTAG_USB_PAD_ENABLE);
+
     const uart_config_t cfg = {
         .baud_rate = LINK_BAUD,
         .data_bits = UART_DATA_8_BITS,
