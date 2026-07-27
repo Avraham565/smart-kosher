@@ -1,9 +1,8 @@
 """Schedule model and business validation rules."""
 
 from ..zmanim import gregorian_day_number
-
-from .actions import validate_action
 from ._values import clone_json, is_integer, require_non_empty_string, validate_json
+from .actions import validate_action
 
 ZMAN_KEYS = {
     "alot_hashachar", "talit_and_tefillin", "netz_hachama",

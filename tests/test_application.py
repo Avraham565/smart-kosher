@@ -1,7 +1,7 @@
 import asyncio
-import unittest
 import os
 import shutil
+import unittest
 
 from smart_kosher.adapters import (
     H2Simulator,

@@ -8,10 +8,17 @@ import asyncio
 import unittest
 
 from smart_kosher.adapters import (
-    H2Simulator, MemoryEventJournal, MemoryRepository,
+    H2Simulator,
+    MemoryEventJournal,
+    MemoryRepository,
 )
 from smart_kosher.application.api import (
-    Api, ApiError, BAD_REQUEST, CONFLICT, NOT_FOUND, UNSUPPORTED,
+    BAD_REQUEST,
+    CONFLICT,
+    NOT_FOUND,
+    UNSUPPORTED,
+    Api,
+    ApiError,
 )
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService

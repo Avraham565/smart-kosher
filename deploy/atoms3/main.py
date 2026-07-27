@@ -26,7 +26,7 @@ import time
 from smart_kosher import serial_channel
 from smart_kosher.adapters import MachineRtcClock, SettingsStore, ZigbeeGateway
 from smart_kosher.adapters.json_repository import JsonEventJournal, JsonRepository
-from smart_kosher.application.api import Api, ApiError, BAD_REQUEST
+from smart_kosher.application.api import BAD_REQUEST, Api, ApiError
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.device_time import DeviceTimeService

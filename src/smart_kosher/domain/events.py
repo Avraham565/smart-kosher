@@ -1,9 +1,8 @@
 """Events produced by the planner and consumed by an executor."""
 
 from ..zmanim import gregorian_day_number
-
-from .actions import validate_action
 from ._values import clone_json, is_integer, require_non_empty_string, validate_json
+from .actions import validate_action
 
 
 class EventValidationError(ValueError):

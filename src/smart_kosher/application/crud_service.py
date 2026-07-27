@@ -3,7 +3,6 @@
 import binascii
 import os
 
-
 ENTITY_TYPES = ("zones", "endpoints", "groups", "schedules")
 
 _PREFIXES = {

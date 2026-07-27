@@ -5,9 +5,11 @@ import json
 import unittest
 
 from smart_kosher.adapters import (
-    H2Simulator, MemoryEventJournal, MemoryRepository,
+    H2Simulator,
+    MemoryEventJournal,
+    MemoryRepository,
 )
-from smart_kosher.application.api import Api, ApiError, BAD_REQUEST
+from smart_kosher.application.api import BAD_REQUEST, Api, ApiError
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.device_time import DeviceTimeService

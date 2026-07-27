@@ -14,7 +14,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from smart_kosher.adapters import (
-    H2Simulator, MemoryEventJournal, MemoryRepository, SettingsStore,
+    H2Simulator,
+    MemoryEventJournal,
+    MemoryRepository,
+    SettingsStore,
 )
 from smart_kosher.adapters.json_repository import JsonRepository
 from smart_kosher.application.control_service import ControlService

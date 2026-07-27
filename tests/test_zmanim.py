@@ -1,8 +1,8 @@
 import unittest
 from datetime import date, timedelta
 
-from smart_kosher.data import get_city, load_cities
 import smart_kosher.zmanim.hebrew_cal as hebrew_cal
+from smart_kosher.data import get_city, load_cities
 from smart_kosher.zmanim import (
     compute_zmanim,
     date_info,

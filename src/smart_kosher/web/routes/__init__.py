@@ -6,9 +6,14 @@ validation and error classification live in application/api.py.
 """
 
 from ...application.api import (
-    ApiError, BAD_REQUEST, CONFLICT, INTERNAL, NOT_FOUND, UNSUPPORTED,
+    BAD_REQUEST,
+    CONFLICT,
+    INTERNAL,
+    NOT_FOUND,
+    UNSUPPORTED,
+    ApiError,
 )
-from ..responses import ok, err
+from ..responses import err, ok
 
 _HTTP_STATUS = {
     BAD_REQUEST: 400,

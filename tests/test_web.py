@@ -8,7 +8,6 @@ from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService, NotFoundError
 from smart_kosher.application.executor import Executor
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _repo(initial=None):

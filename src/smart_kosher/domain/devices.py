@@ -1,7 +1,7 @@
 """JSON-native schemas for zones, endpoints, and groups."""
 
-from .actions import ACTION_TYPES
 from ._values import clone_json, is_integer, require_non_empty_string, validate_json
+from .actions import ACTION_TYPES
 
 
 class DeviceValidationError(ValueError):

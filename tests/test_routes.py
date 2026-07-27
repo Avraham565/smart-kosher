@@ -8,13 +8,15 @@ import unittest
 from microdot.test_client import TestClient
 
 from smart_kosher.adapters import (
-    H2Simulator, MemoryEventJournal, MemoryRepository, SettingsStore,
+    H2Simulator,
+    MemoryEventJournal,
+    MemoryRepository,
+    SettingsStore,
 )
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.executor import Executor
 from smart_kosher.web.server import create_app
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

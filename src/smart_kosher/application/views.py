@@ -8,7 +8,6 @@ storage.
 
 import time
 
-from .planner import Planner, PlannerConfig
 from ..zmanim import (
     add_gregorian_days,
     compute_zmanim,
@@ -16,6 +15,7 @@ from ..zmanim import (
     israel_utc_offset_for_local,
     parasha,
 )
+from .planner import Planner, PlannerConfig
 
 _SETTINGS_DEFAULTS = {
     "lat": 31.7683,

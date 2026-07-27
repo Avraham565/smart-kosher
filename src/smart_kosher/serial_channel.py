@@ -22,7 +22,7 @@ try:
 except ImportError:
     import json
 
-from .application.api import ApiError, BAD_REQUEST, INTERNAL
+from .application.api import BAD_REQUEST, INTERNAL, ApiError
 
 
 def _error(message, kind=BAD_REQUEST):
@@ -96,8 +96,8 @@ async def serve(api, extra_ops=None):
     Runs alongside the HTTP server on the shared asyncio loop; a request
     is handled synchronously (Api ops are all synchronous and fast).
     """
-    import sys
     import asyncio
+    import sys
 
     reader = asyncio.StreamReader(sys.stdin)
     while True:
