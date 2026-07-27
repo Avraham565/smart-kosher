@@ -1,6 +1,6 @@
 import unittest
 
-from smart_kosher.domain.actions import Action, validate_action
+from smart_kosher.domain.actions import validate_action
 from smart_kosher.domain.devices import (
     Endpoint,
     Group,

@@ -10,8 +10,7 @@ zmanim.py
 """
 
 from .astronomy import (
-    julian_day, sun_times, utc_sun_time,
-    sea_level_zenith, _adjusted_zenith, _utc_sun_minutes, _validate_location
+    julian_day, sea_level_zenith, _adjusted_zenith, _utc_sun_minutes, _validate_location
 )
 
 # ---------------------------------------------------------------------------

@@ -3,8 +3,6 @@
 import binascii
 import os
 
-from ..domain.devices import DeviceValidationError
-from ..domain.schedules import ScheduleValidationError
 
 ENTITY_TYPES = ("zones", "endpoints", "groups", "schedules")
 

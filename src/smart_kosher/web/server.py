@@ -8,13 +8,13 @@ import gc
 
 from microdot import Microdot
 
-# MicroPython exposes gc.mem_free; CPython does not.
-_IS_MICROPYTHON = hasattr(gc, "mem_free")
-
 from ..application.api import Api
 from ..application.device_time import DeviceTimeService
 from ..application.views import ViewService
 from .routes import register_all
+
+# MicroPython exposes gc.mem_free; CPython does not.
+_IS_MICROPYTHON = hasattr(gc, "mem_free")
 
 
 def create_app(crud_service, control_service, settings_store,
