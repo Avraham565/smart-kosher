@@ -16,3 +16,24 @@ include = ["smart_kosher*"]
 
 [tool.setuptools.package-data]
 smart_kosher = ["data/*.json"]
+
+[tool.pytest.ini_options]
+# Without this, pytest walks into panel/managed_components (vendored LVGL)
+# and its self-running test suite aborts the whole collection.
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py38"
+# Vendored LVGL / generated font tables (panel) and exploratory probe
+# scripts (experiments) are not held to production lint.
+extend-exclude = ["panel", "experiments"]
+
+[tool.ruff.lint]
+# Correctness core (pyflakes + selected pycodestyle) plus import ordering.
+# Deliberately not enforcing stylistic rewrites (f-strings, etc.).
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# MicroPython firmware: create_task() results are kept in locals on purpose
+# so the event loop's tasks are not garbage-collected. Not dead variables.
+"deploy/atoms3/main.py" = ["F841"]
