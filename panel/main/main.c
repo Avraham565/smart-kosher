@@ -1,11 +1,20 @@
 /*
  * Panel A — CrowPanel Advance 7" (ESP32-S3) UI firmware.
  *
- * Built strictly from official documentation:
- *   - esp_lcd RGB panel (Espressif): 2 PSRAM frame buffers + bounce buffers,
- *     the documented mitigation for RGB "screen drift"
+ * Rendering: TRACK B (bounce) — two full framebuffers in PSRAM + bounce
+ * buffers. LVGL draws direct_mode and swaps on vsync (avoid_tearing); the RGB
+ * DMA feeds from small internal-SRAM bounce buffers refilled from PSRAM, which
+ * decouples the LCD's real-time deadline from PSRAM latency spikes (Espressif's
+ * recommended screen-drift fix). restart-in-vsync stays OFF.
+ * Ladder walked, one variable each: pure Track A drifted/rolled at idle;
+ * 18 MHz pclk did NOT change it (=> not raw bandwidth — points at PSRAM-latency
+ * / DMA timing), so bounce is enabled here. If it STILL drifts, the suspect
+ * moves to panel timing (porches/polarity), not the buffer path.
+ *
+ * Built from official documentation:
+ *   - esp_lcd RGB panel (Espressif): multiple PSRAM framebuffers
  *     https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/lcd/rgb_lcd.html
- *   - esp_lvgl_port (Espressif): LVGL glue with avoid_tearing + bb_mode
+ *   - esp_lvgl_port (Espressif): LVGL glue with avoid_tearing
  *   - Timings: Elecrow factory example (LovyanGFX_Driver.h in the official
  *     CrowPanel-Advance-7 repo): 21 MHz pclk, porches 8/4/8, clock edge
  *     equal to esp_lcd pclk_active_neg=1.
@@ -34,8 +43,8 @@ static const char *TAG = "panel_a";
 
 #define LCD_H_RES 800
 #define LCD_V_RES 480
-#define LCD_PCLK_HZ (21 * 1000 * 1000)   /* Elecrow factory value */
-#define BOUNCE_LINES 10                  /* 800*10*2 = 16KB x2 internal RAM */
+#define LCD_PCLK_HZ (18 * 1000 * 1000)   /* diagnostic: factory 21 MHz drifted */
+#define BOUNCE_LINES 10                   /* 800*10*2 = 16KB x2 internal RAM */
 
 #define PIN_HSYNC 40
 #define PIN_VSYNC 41
@@ -98,8 +107,8 @@ static esp_lcd_panel_handle_t init_rgb_panel(void)
         },
         .data_width = 16,
         .bits_per_pixel = 16,
-        .num_fbs = 2,                                   /* double FB in PSRAM */
-        .bounce_buffer_size_px = LCD_H_RES * BOUNCE_LINES,
+        .num_fbs = 2,                    /* two full FBs in PSRAM */
+        .bounce_buffer_size_px = LCD_H_RES * BOUNCE_LINES,   /* Track B */
         .hsync_gpio_num = PIN_HSYNC,
         .vsync_gpio_num = PIN_VSYNC,
         .de_gpio_num = PIN_DE,
@@ -119,7 +128,7 @@ static esp_lcd_panel_handle_t init_rgb_panel(void)
     ESP_ERROR_CHECK(esp_lcd_new_rgb_panel(&cfg, &panel));
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
-    ESP_LOGI(TAG, "RGB panel up (%d MHz, bounce %d lines)",
+    ESP_LOGI(TAG, "RGB panel up (%d MHz, Track B: 2 FBs + %d-line bounce)",
              LCD_PCLK_HZ / 1000000, BOUNCE_LINES);
     return panel;
 }
@@ -183,7 +192,7 @@ void app_main(void)
     };
     const lvgl_port_display_rgb_cfg_t rgb_cfg = {
         .flags = {
-            .bb_mode = true,        /* we allocated bounce buffers */
+            .bb_mode = true,        /* Track B: bounce buffers in use */
             .avoid_tearing = true,  /* LVGL draws into the 2 panel FBs */
         },
     };

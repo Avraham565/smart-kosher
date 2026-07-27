@@ -6,12 +6,25 @@
 # source is rsynced to a native WSL directory and built there. Artifacts
 # are copied back to panel/build_out/ in the repo.
 #
-# Usage:  bash panel/build.sh [IDF_PATH]
+# Profiles (PANEL_PROFILE env var):
+#   production  (default) — clean Track A baseline; flash this to judge
+#                           real visual stability.
+#   diag                  — layers sdkconfig.defaults.diag (perf/sysmon/log)
+#                           for numeric measurement only.
+#
+# Usage:  [PANEL_PROFILE=diag] bash panel/build.sh [IDF_PATH]
 set -euo pipefail
 
 REPO_PANEL="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$HOME/panel_a_build"
 IDF="${1:-$HOME/lvgl_micropython/lib/esp-idf}"   # any clean v5.3+ checkout
+PROFILE="${PANEL_PROFILE:-production}"
+
+DEFAULTS="sdkconfig.defaults"
+if [ "$PROFILE" = "diag" ]; then
+    DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.diag"
+fi
+echo "Profile: $PROFILE  (SDKCONFIG_DEFAULTS=$DEFAULTS)"
 
 rsync -a --delete \
     --exclude build/ --exclude build_out/ \
@@ -21,10 +34,14 @@ rsync -a --delete \
 source "$IDF/export.sh" > /dev/null
 
 cd "$BUILD_DIR"
+# Force sdkconfig to be regenerated from the chosen defaults every build, so
+# a profile switch (or an edited *.defaults) always takes effect and no stale
+# config lingers between production/diag runs.
+rm -f sdkconfig
 if [ ! -f build/CMakeCache.txt ]; then
-    idf.py set-target esp32s3
+    idf.py -D SDKCONFIG_DEFAULTS="$DEFAULTS" set-target esp32s3
 fi
-idf.py build
+idf.py -D SDKCONFIG_DEFAULTS="$DEFAULTS" build
 
 mkdir -p "$REPO_PANEL/build_out"
 cp build/panel_a.bin \

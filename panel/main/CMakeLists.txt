@@ -1,6 +1,10 @@
 idf_component_register(
     SRCS "main.c"
          "ui/ui_home.c"
+         "ui/widgets.c"
+         "ui/shell.c"
+         "ui/page.c"
+         "ui/clock.c"
          "ui/link.c"
          "fonts/assistant_16.c"
          "fonts/assistant_20.c"

@@ -1,4 +1,12 @@
 # CrowPanel Advance 7" (ESP32-S3-WROOM-1-N16R8) — panel UI firmware
+# ===================================================================
+# PRODUCTION-CLEAN profile (Track A). This is the baseline you flash to
+# judge real visual stability — no perf/sysmon/LVGL-logging, because the
+# measurement tools are themselves per-frame load that moves the result.
+# For numeric measurement build the diagnostic profile instead:
+#     PANEL_PROFILE=diag bash panel/build.sh
+# which layers sdkconfig.defaults.diag on top of this file.
+# ===================================================================
 CONFIG_IDF_TARGET="esp32s3"
 
 # Flash: proven settings on this exact board (all MicroPython-era flashes)
@@ -12,8 +20,8 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 
-# Required with RGB bounce buffers + PSRAM frame buffers (esp_lcd rgb docs:
-# "screen drift" mitigation must pair bounce buffers with 64B cache lines)
+# 64B data-cache line — foundational PSRAM cache geometry (fewer cache
+# transactions per FB burst). Kept in Track A; it is not a drift plaster.
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
@@ -22,29 +30,18 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # esp_lvgl_port recommendation
 CONFIG_FREERTOS_HZ=1000
 
-# Extra safety net from esp_lcd: realign DMA at each vsync if it ever slips
-CONFIG_LCD_RGB_RESTART_IN_VSYNC=y
-
-# --- Performance notes (tried per esp_lvgl_port docs/performance.md) ---
-# Verified-stable baseline is the LVGL defaults (33ms refresh). Deltas tested
-# on 2026-07-18 and REVERTED after left-edge jitter with direct_mode dual-FB:
-#   CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=y
-#   CONFIG_LV_DEF_REFR_PERIOD=10
-#   CONFIG_LV_USE_SYSMON=y + CONFIG_LV_USE_PERF_MONITOR=y (overlay itself
-#   repaints constantly — retest flags ONE AT A TIME if smoothness is needed)
-# esp_lvgl_port's custom SIMD blend is only for LVGL 9.1.x (upstreamed into
-# LVGL since 9.2) — never enable LV_DRAW_SW_ASM_CUSTOM here.
-
-# FPS overlay — single-variable experiment (2026-07-19): meter ONLY, refresh
-# stays at default 33ms. Remove before production.
-CONFIG_LV_USE_SYSMON=y
-CONFIG_LV_USE_PERF_MONITOR=y
-# Log mode: numbers go to serial, nothing is drawn on screen (the on-screen
-# overlay itself flickered in direct_mode — observed on hardware 2026-07-19)
-CONFIG_LV_USE_PERF_MONITOR_LOG_MODE=y
-CONFIG_LV_USE_LOG=y
-CONFIG_LV_LOG_LEVEL_INFO=y
-CONFIG_LV_LOG_PRINTF=y
+# --- Rendering: Track A (truly clean) ---
+# Two full framebuffers in PSRAM + direct_mode + avoid_tearing (set in main.c).
+# Nothing else. This is the honest, confound-free baseline we measure on.
+# Diagnostic ladder if it drifts (ONE variable at a time, in this order):
+#   1. drop pclk to 18 MHz (main.c) — relieve PSRAM fetch pressure at the root
+#   2. Track B: bounce buffers + bb_mode — Espressif's RECOMMENDED structural
+#      fix (decouples the LCD DMA deadline from PSRAM latency)
+# CONFIG_LCD_RGB_RESTART_IN_VSYNC is deliberately NOT set: Espressif marks it
+# "not recommended", it doesn't fix the root and can turn a smooth drift into
+# per-frame micro-jumps + lower FPS. It masks the truth we're trying to read.
+# LVGL defaults (33ms refresh) stay. Never set CONFIG_LV_DEF_REFR_PERIOD=10 or
+# CONFIG_LV_DRAW_SW_ASM_CUSTOM (9.1-only).
 
 # --- LVGL (managed component, configured via Kconfig) ---
 CONFIG_LV_COLOR_DEPTH_16=y

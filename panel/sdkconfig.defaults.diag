@@ -1,0 +1,16 @@
+# DIAGNOSTIC profile overlay — layered ON TOP of sdkconfig.defaults via:
+#     PANEL_PROFILE=diag bash panel/build.sh
+# Numeric measurement ONLY. Never judge visual "is there flicker" on this
+# build — these flags are per-frame load that can move the result. Use the
+# production-clean profile for the eye test.
+
+# FPS / render telemetry to serial (nothing drawn on screen; the on-screen
+# overlay itself flickered in direct_mode — observed on hardware 2026-07-19)
+CONFIG_LV_USE_SYSMON=y
+CONFIG_LV_USE_PERF_MONITOR=y
+CONFIG_LV_USE_PERF_MONITOR_LOG_MODE=y
+
+# LVGL logging (LV_LOG_USER events from the UI / link code)
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_INFO=y
+CONFIG_LV_LOG_PRINTF=y

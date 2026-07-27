@@ -37,7 +37,8 @@
 #define TH_FONT_H1     (&assistant_sb_28)
 #define TH_FONT_CLOCK  (&assistant_sb_48)
 
-/* Card base style helper */
+/* Card base style helper. No shadow by design: shadow is a per-rect software
+ * blur, and a 1px border reads just as cleanly on this flat, light UI. */
 static inline void th_card(lv_obj_t *obj)
 {
     lv_obj_set_style_bg_color(obj, TH_SURFACE, LV_PART_MAIN);
@@ -45,7 +46,14 @@ static inline void th_card(lv_obj_t *obj)
     lv_obj_set_style_border_width(obj, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(obj, TH_LINE, LV_PART_MAIN);
     lv_obj_set_style_pad_all(obj, TH_PAD, LV_PART_MAIN);
-    lv_obj_set_style_shadow_width(obj, 8, LV_PART_MAIN);
-    lv_obj_set_style_shadow_color(obj, lv_color_hex(0x101828), LV_PART_MAIN);
-    lv_obj_set_style_shadow_opa(obj, LV_OPA_10, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(obj, 0, LV_PART_MAIN);
+}
+
+/* Common screen base: bg, RTL, no free scrolling (hardware wants static
+ * pages — see main.c Track A note). */
+static inline void th_screen(lv_obj_t *scr)
+{
+    lv_obj_set_style_bg_color(scr, TH_BG, LV_PART_MAIN);
+    lv_obj_set_style_base_dir(scr, LV_BASE_DIR_RTL, LV_PART_MAIN);
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 }
