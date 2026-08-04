@@ -1,5 +1,45 @@
 menu "Smart Kosher H2 Coordinator"
 
+    config COORD_FW_NAME
+        string "Firmware name reported over the link"
+        default "smart_kosher_h2_coordinator"
+
+    config COORD_FW_VERSION
+        string "Firmware version reported over the link"
+        default "0.11.2"
+        help
+            0.8.0 first proved delivery: on_off is acked only once the
+            device's own radio confirms the frame, so the hub can tell
+            "sent" from "arrived".
+
+            0.9.0 applies the same rule to reporting. Configuring reporting
+            now succeeds only when the DEVICE says it accepted the values,
+            not when our request reached it -- and read_report_cfg asks a
+            device what interval it is actually running, because asking for
+            min_interval = 0 and getting a report every 3 seconds were both
+            true at once. See docs/h2_production_plan.md.
+
+    config COORD_MAX_CHILDREN
+        int "Max devices that may join the coordinator directly"
+        default 10
+        range 1 200
+        help
+            Direct children only -- NOT a cap on the network. Mains-powered
+            switches are routers and host children of their own, so device
+            11 can still join through device 3.
+
+            But in a home where every switch is in range of the panel, they
+            all try the coordinator first, and once this is full a join
+            depends on some existing router accepting the device. That is a
+            real pairing failure mode.
+
+            10 is inherited from Espressif's coordinator example, not derived
+            from anything. The field is a uint8_t so the API allows far more,
+            but the true ceiling is the stack's internal neighbour table,
+            which this SDK does not expose -- raising this must be verified on
+            hardware (does it still form a network, and can 11+ devices join
+            directly?). Left at the proven value until then.
+
     config COORD_UART_PORT
         int "UART port used for S3 slot communication"
         default 1
