@@ -25,6 +25,7 @@ import lvgl as lv
 import brain
 import display
 import lvgl_loop
+import scheduler
 import store
 import theme
 import toast
@@ -42,6 +43,13 @@ _ZIGBEE_UART_ID = 1
 _ZIGBEE_TX_PIN = 5
 _ZIGBEE_RX_PIN = 19
 _ZIGBEE_BAUD = 115200
+# 1024 bytes is only ~89ms of wire at this baud. Everything on this board --
+# LVGL, the brain, the scheduler -- shares one cooperative loop, and any block
+# longer than that drops inbound H2 frames (a device_joined or an
+# attribute_report, lost with no error anywhere). The scheduler's first tick
+# computes a week of zmanim in one uninterruptible go, which is exactly such a
+# block. 4096 buys ~355ms of slack; PSRAM makes the cost irrelevant.
+_ZIGBEE_RXBUF = 4096
 
 
 def _make_zigbee(repo):
@@ -49,7 +57,8 @@ def _make_zigbee(repo):
 
     from smart_kosher.adapters import ZigbeeGateway
     uart = UART(_ZIGBEE_UART_ID, baudrate=_ZIGBEE_BAUD,
-                tx=_ZIGBEE_TX_PIN, rx=_ZIGBEE_RX_PIN, timeout=0, rxbuf=1024)
+                tx=_ZIGBEE_TX_PIN, rx=_ZIGBEE_RX_PIN, timeout=0,
+                rxbuf=_ZIGBEE_RXBUF)
     gateway = ZigbeeGateway(
         uart, repo, registry_path=brain.DATA_DIR + "/zigbee_devices.json")
     return gateway, uart
@@ -167,10 +176,15 @@ async def _run(composed, gateway, uart):
     devicest = asyncio.create_task(_devices_refresh(composed.api))
     reader = asyncio.create_task(_zigbee_reader(gateway, uart))
     heart = asyncio.create_task(gateway.watchdog())
+    # What turns a saved schedule into a sent command. Its first tick also does
+    # boot catch-up, so a schedule missed while the panel was powered off still
+    # fires (bounded look-back + journal dedup -- see scheduler.py).
+    sched = asyncio.create_task(scheduler.Scheduler.for_brain(composed).run())
     print("panel_mp up — LVGL", lv.version_major(), lv.version_minor(),
           "@", display.PCLK_HZ // 1_000_000,
-          "MHz; brain in-process; H2 on UART", _ZIGBEE_UART_ID)
-    await asyncio.gather(pump, status, clockt, devicest, reader, heart)
+          "MHz; brain in-process; H2 on UART", _ZIGBEE_UART_ID,
+          "; scheduler every", scheduler.TICK_SECONDS, "s")
+    await asyncio.gather(pump, status, clockt, devicest, reader, heart, sched)
 
 
 def main():

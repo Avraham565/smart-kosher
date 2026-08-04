@@ -203,13 +203,55 @@ class Api:
                 entity, _require_id(params), _require_dict(params, "data"))
 
         def delete(params):
-            self._crud.delete(entity, _require_id(params))
+            entity_id = _require_id(params)
+            ieee = self._radio_identity(entity, entity_id)
+            self._crud.delete(entity, entity_id)
+            if ieee is not None:
+                self._release_radio_device(ieee)
             return None
 
         ops[entity + ".list"] = list_
         ops[entity + ".create"] = create
         ops[entity + ".update"] = update
         ops[entity + ".delete"] = delete
+
+    # ── Deleting a device must also remove it from the radio ─────────────────
+
+    def _radio_identity(self, entity, entity_id):
+        """The ieee address a soon-to-be-deleted endpoint occupies, if any."""
+        if entity != "endpoints" or self._zigbee is None:
+            return None
+        try:
+            return (self._crud.get(entity, entity_id) or {}).get("ieee_address")
+        except Exception:
+            return None
+
+    def _release_radio_device(self, ieee):
+        """Tell the coordinator to drop a device once nothing refers to it.
+
+        Deleting an endpoint used to remove only this hub's record of it: the
+        device stayed joined to the mesh, kept its slot among the
+        coordinator's children, and would reappear in the registry the next
+        time it announced itself. Removing it from the panel now removes it
+        from the network.
+
+        Guarded by a reference check because one physical device can back
+        several endpoints -- a two-gang switch is two entities on one radio,
+        and deleting one gang must not evict the other.
+        """
+        for entity in self._crud.list("endpoints"):
+            if entity.get("ieee_address") == ieee:
+                return          # another endpoint still uses this device
+        try:
+            self._zigbee.forget_device(ieee)
+        except Exception as exc:
+            # The entity is already gone; a radio that cannot be reached must
+            # not turn a successful delete into an error the user sees.
+            self._log_radio_error("forget_device", exc)
+
+    @staticmethod
+    def _log_radio_error(what, exc):
+        print("zigbee {} failed: {}".format(what, exc))
 
     # ── Schedules ─────────────────────────────────────────────────────────────
 

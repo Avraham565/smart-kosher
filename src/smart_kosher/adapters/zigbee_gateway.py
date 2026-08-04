@@ -50,7 +50,10 @@ except ImportError:  # CPython
     def ticks_diff(a, b):
         return a - b
 
-from ..ports.device_gateway import DeviceGateway
+from ..ports.device_gateway import (
+    EXECUTION_SUCCESS_STATUSES,
+    DeviceGateway,
+)
 from .uart_codec import decode as uart_decode
 from .uart_codec import encode as uart_encode
 
@@ -60,6 +63,32 @@ _DEFAULT_ACK_TIMEOUT_MS = 1500
 _BREAKER_THRESHOLD = 2          # consecutive timeouts before failing fast
 _WATCHDOG_UP_MS = 30000         # heartbeat ping interval while link is up
 _WATCHDOG_DOWN_MS = 2000        # re-probe interval while link is down
+
+# Enabling reporting is bind + configure_reporting *on the device*, and either
+# half can fail after the command itself was accepted -- the outcome only
+# arrives later, as an event. Until it succeeds the device is deaf to its own
+# wall switch, which is invisible unless we keep asking.
+_REPORTING_RETRY_BASE_MS = 30000
+_REPORTING_RETRY_MAX_MS = 600000
+# Concurrency window, derived from the other end: the coordinator's request
+# table is 16 slots (TXN_MAX) and a bind holds one for several seconds. Four
+# leaves it comfortably idle for commands while still pipelining. This bounds
+# what is *outstanding*, not what is sent per unit time, so a backlog drains as
+# fast as the link answers -- ten devices or a thousand.
+_REPORTING_WINDOW = 4
+# A request the coordinator never answers must not hold its credit forever.
+_REPORTING_INFLIGHT_MS = 12000
+
+# Group delivery concurrency. Shares the coordinator's 16-slot request table
+# with _REPORTING_WINDOW, so the two together stay well inside it.
+_COMMAND_WINDOW = 4
+
+# Ops that address a Zigbee device, and so can be proven delivered. Everything
+# else (ping, permit_join) is the coordinator answering about itself.
+_DEVICE_OPS = ("on_off", "read_attr", "read_report_cfg")
+
+# The cluster whose reporting the control path depends on.
+_CLUSTER_ON_OFF = 0x0006
 
 
 class ZigbeeGateway(DeviceGateway):
@@ -75,9 +104,15 @@ class ZigbeeGateway(DeviceGateway):
         self._pending = {}
         # ieee -> {"short_addr": str, "endpoint": int, "reporting": bool}
         self._registry = self._load_registry()
-        # ieee -> bool, from attribute_report and read_attr acks
+        # ieee -> bool. STRICTLY the device's own word (attribute_report or a
+        # read_attr ack). wait_for_report's whole value is that this is never
+        # anything we merely believe, so nothing else may write here.
         self._states = {}
         self._state_ms = {}
+        # ieee -> bool we last commanded and have no reason to doubt. Kept
+        # apart from _states for the reason above; cleared the moment the
+        # device actually says something.
+        self._expected = {}
         # ieee -> [asyncio.Event, ...] — observed-state waiters
         self._state_waiters = {}
         # circuit breaker — moved ONLY by ping outcomes: a device that
@@ -90,6 +125,21 @@ class ZigbeeGateway(DeviceGateway):
         # coordinator link was fine (classic stale-short_addr rejoin);
         # cleared by any report/rejoin from the device.
         self._suspect = {}
+        # ieee -> {"attempts": int, "due": ticks, "error": str} while the
+        # coordinator has not confirmed reporting for the device.
+        self._reporting_retry = {}
+        # ieee -> credit expiry, for requests sent and not yet answered.
+        self._reporting_inflight = {}
+        # ieee -> {"active_power": .., "rms_voltage": .., "age_ms": ..} for
+        # devices that carry a metering cluster. Passed through as the device
+        # sends it -- raw and unscaled; deciding what a number means is a job
+        # for whoever displays it.
+        self._measurements = {}
+        self._measured_ms = {}
+        # What the coordinator says it can do, learned from boot/ping. Empty
+        # for firmware that predates the advertisement, which is exactly how
+        # an old build keeps its old (looser) semantics.
+        self._capabilities = ()
         # coordinator liveness, learned from boot/ping/network_formed
         self.info = {"network_up": None, "firmware_version": None,
                      "target": None}
@@ -126,8 +176,23 @@ class ZigbeeGateway(DeviceGateway):
                 item["on_off"] = self._states[ieee]
                 item["state_age_ms"] = ticks_diff(
                     ticks_ms(), self._state_ms[ieee])
+            if ieee in self._expected:
+                # A command we sent outranks a report from before it. Without
+                # this the UI flipped back to the old state on the next poll
+                # and then to the new one when the report landed -- a visible
+                # off / on / off bounce on every tap.
+                item["on_off"] = self._expected[ieee]
             if self._suspect.get(ieee):
                 item["unreachable"] = True
+            # Why reporting is still off, so "its wall switch does nothing"
+            # is diagnosable instead of just silent.
+            retry = self._reporting_retry.get(ieee)
+            if retry and retry.get("error"):
+                item["reporting_error"] = retry["error"]
+            if ieee in self._measurements:
+                item["measurements"] = dict(self._measurements[ieee])
+                item["measured_age_ms"] = ticks_diff(
+                    ticks_ms(), self._measured_ms[ieee])
             out[ieee] = item
         return out
 
@@ -178,21 +243,40 @@ class ZigbeeGateway(DeviceGateway):
             elif op == "attribute_report":
                 self._on_state(payload)
             elif op == "reporting_configured":
-                ieee = self._ieee_for_short(payload.get("short_addr"))
-                if ieee:
-                    self._registry[ieee]["reporting"] = True
-                    self._save_registry()
+                # The coordinator reports the *outcome* in payload.status --
+                # taking the event's arrival as success marked a failed
+                # configure as working, and the device then never reported.
+                self._on_reporting_result(
+                    payload, payload.get("status", "ok") == "ok")
+            elif op == "reporting_failed":
+                self._on_reporting_result(payload, False)
+            elif op == "device_endpoints":
+                self._on_device_endpoints(payload)
+            elif op == "device_clusters":
+                self._on_device_clusters(payload)
+            elif op == "measurement_report":
+                self._on_measurement(payload)
+            elif op == "device_left":
+                self._on_device_left(payload)
+            elif op == "network_down":
+                self.info["network_up"] = False
             elif op in ("boot", "network_formed"):
                 self.info["network_up"] = True
                 if payload.get("firmware_version"):
                     self.info["firmware_version"] = payload["firmware_version"]
                 if payload.get("target"):
                     self.info["target"] = payload["target"]
+                self._learn_capabilities(payload)
         elif mtype == "ack":
             if op == "ping":
                 self.info["network_up"] = bool(payload.get("network_up"))
                 self.info["firmware_version"] = payload.get("firmware_version")
                 self.info["target"] = payload.get("target")
+                if payload.get("health"):
+                    # Link counters from the coordinator; the only way to tell
+                    # a saturated link from a quiet one in the field.
+                    self.info["health"] = payload["health"]
+                self._learn_capabilities(payload)
             elif op == "read_attr" and "on_off" in payload:
                 # stray/late read ack still carries usable state
                 self._on_state(payload)
@@ -213,15 +297,228 @@ class ZigbeeGateway(DeviceGateway):
         self._save_registry()
         self._log("zigbee device", "joined:" if first_join else "rejoined:",
                   ieee, short)
-        # Fire and forget: the reporting_configured event flips the flag.
-        # Reporting is cheap to (re)request and idempotent.
+        # Enqueue rather than send. A single pairing still goes out on the
+        # next line, because the sweep serves the queue immediately and one
+        # device is well inside the quota -- but a mains outage that brings a
+        # whole house back at once cannot turn into one frame per device.
+        # Sending here directly was exactly that hole: the rate limit governed
+        # retries while first attempts bypassed it.
+        state = self._reporting_retry.setdefault(ieee, {})
+        state["attempts"] = 0
+        state["due"] = ticks_ms()
+        self.pump_reporting()
+
+    # ── reporting lifecycle (bind + configure, both fallible) ─────────
+
+    def _request_reporting(self, ieee, entry, attempts):
+        """Ask the coordinator to bind + configure reporting, and arm a retry.
+
+        Idempotent and cheap to repeat, so re-requesting is always safe. The
+        answer comes back later as reporting_configured / reporting_failed;
+        until one of those says ok, the retry deadline stands.
+        """
         self._write_cmd("enable_reporting",
-                        {"short_addr": short, "endpoint": entry["endpoint"]})
+                        {"short_addr": entry["short_addr"],
+                         "endpoint": entry.get("endpoint", 1)})
+        delay = _REPORTING_RETRY_BASE_MS * (1 << min(attempts, 4))
+        if delay > _REPORTING_RETRY_MAX_MS:
+            delay = _REPORTING_RETRY_MAX_MS
+        state = self._reporting_retry.setdefault(ieee, {})
+        state["attempts"] = attempts + 1
+        state["due"] = ticks_add(ticks_ms(), delay)
+        # Spend a credit. It comes back when the coordinator answers, or when
+        # this deadline passes with no answer at all.
+        self._reporting_inflight[ieee] = ticks_add(ticks_ms(),
+                                                   _REPORTING_INFLIGHT_MS)
+
+    def _on_reporting_result(self, payload, ok):
+        ieee = self._ieee_for_short(payload.get("short_addr"))
+        entry = self._registry.get(ieee) if ieee else None
+        if entry is None:
+            return
+
+        # ``reporting`` means one specific thing: this device will tell us when
+        # its own wall switch is pressed. Only the OnOff cluster answers that.
+        # A verdict about a metering cluster used to land here too, so a failed
+        # measurement configure flipped a perfectly healthy device to
+        # reporting=false and started retrying it -- and once measurements work,
+        # a metering success would have masked a genuine OnOff failure.
+        # Firmware that predates the cluster field only ever asked about OnOff.
+        cluster = payload.get("cluster", _CLUSTER_ON_OFF)
+        if cluster != _CLUSTER_ON_OFF:
+            if not ok:
+                self._log("zigbee measurement reporting failed for", ieee,
+                          hex(cluster), payload.get("reason"))
+            return
+
+        self._reporting_inflight.pop(ieee, None)   # credit returned
+        if ok:
+            self._reporting_retry.pop(ieee, None)
+            if not entry.get("reporting"):
+                entry["reporting"] = True
+                self._save_registry()
+        else:
+            reason = payload.get("reason") or payload.get("status") or "error"
+            state = self._reporting_retry.setdefault(ieee, {})
+            state.setdefault("attempts", 1)
+            state.setdefault("due",
+                             ticks_add(ticks_ms(), _REPORTING_RETRY_BASE_MS))
+            state["error"] = reason
+            if entry.get("reporting"):
+                entry["reporting"] = False
+                self._save_registry()
+            self._log("zigbee reporting failed for", ieee, reason)
+        # Self-clocking: an answer frees a credit, so the next device goes out
+        # now rather than waiting for a timer that knows nothing about how fast
+        # the coordinator is actually replying.
+        self.pump_reporting()
+
+    def pump_reporting(self):
+        """Send queued enable_reporting requests, up to the credit window.
+
+        Flow control, not rate limiting. The resource being protected is the
+        coordinator's in-flight request table -- a *concurrency* limit -- so
+        that is what this bounds. An earlier version capped sends per watchdog
+        tick instead, which tied throughput to an unrelated heartbeat: with a
+        houseful of devices it would have crawled even though each bind
+        answers in well under a second, and with a fast link it would have sat
+        idle between ticks.
+
+        The queue itself is unbounded, and deliberately so: it is one small
+        dict entry per device, so the design does not care whether there are
+        ten devices or a thousand. Only ``_REPORTING_WINDOW`` are ever in
+        flight, and throughput is whatever the link can actually sustain.
+
+        Safe to call from anywhere -- a join, an answer, or the heartbeat.
+        """
+        now = ticks_ms()
+
+        # Reclaim credits from requests that were never answered. Without this
+        # a coordinator that swallows one request would leak a credit and the
+        # window would shrink to nothing.
+        for ieee in list(self._reporting_inflight):
+            if ticks_diff(self._reporting_inflight[ieee], now) <= 0:
+                del self._reporting_inflight[ieee]
+
+        ready = []
+        for ieee in list(self._reporting_retry):
+            entry = self._registry.get(ieee)
+            if entry is None or entry.get("reporting"):
+                self._reporting_retry.pop(ieee, None)
+                self._reporting_inflight.pop(ieee, None)
+                continue
+            if ieee in self._reporting_inflight:
+                continue
+            if ticks_diff(self._reporting_retry[ieee]["due"], now) <= 0:
+                ready.append(ieee)
+
+        # Longest-waiting first, so nothing is starved by newer arrivals.
+        ready.sort(key=lambda i: ticks_diff(self._reporting_retry[i]["due"], now))
+        for ieee in ready:
+            if len(self._reporting_inflight) >= _REPORTING_WINDOW:
+                break
+            # Never give up: a switch that cannot report its own presses is a
+            # broken product, and the backoff keeps a dead one cheap.
+            self._request_reporting(ieee, self._registry[ieee],
+                                    self._reporting_retry[ieee]["attempts"])
+
+    # Cluster ids worth naming. A relay that carries either of these can
+    # measure electricity; one that carries neither cannot, whatever the
+    # datasheet suggests. Until discovery existed there was no way to tell,
+    # because the coordinator only ever spoke OnOff.
+    _METERING_CLUSTERS = {0x0702: "metering", 0x0B04: "electrical_measurement"}
+
+    def _on_device_endpoints(self, payload):
+        """The device's real endpoint list, discovered after it joined.
+
+        device_joined always reports endpoint 1 because that is all it knows
+        at announce time; this is what a two-gang switch needs.
+        """
+        ieee = self._ieee_for_short(payload.get("short_addr"))
+        endpoints = payload.get("endpoints")
+        if not ieee or not isinstance(endpoints, list) or not endpoints:
+            return
+        self._registry[ieee]["endpoints"] = endpoints
+        self._save_registry()
+        self._log("zigbee endpoints for", ieee, endpoints)
+
+    def _on_device_clusters(self, payload):
+        """What one endpoint can do. Recorded so capability questions are
+        answered from the device rather than from its model number."""
+        ieee = self._ieee_for_short(payload.get("short_addr"))
+        clusters = payload.get("in_clusters")
+        if not ieee or not isinstance(clusters, list):
+            return
+        entry = self._registry[ieee]
+        found = entry.setdefault("clusters", {})
+        found[str(payload.get("endpoint", 1))] = clusters
+        measures = sorted(self._METERING_CLUSTERS[c]
+                          for c in clusters if c in self._METERING_CLUSTERS)
+        if measures:
+            entry["measures"] = measures
+            # Best effort, and deliberately so: unlike OnOff reporting -- which
+            # control correctness depends on and which therefore gets retries --
+            # a missing measurement costs a reading, not a schedule. It is
+            # requested once here and left alone.
+            for cluster in clusters:
+                if cluster in self._METERING_CLUSTERS:
+                    self._write_cmd("enable_reporting", {
+                        "short_addr": entry["short_addr"],
+                        "endpoint": payload.get("endpoint", 1),
+                        "cluster": cluster})
+        self._save_registry()
+        self._log("zigbee clusters for", ieee, payload.get("endpoint"),
+                  clusters, measures)
+
+    def _on_measurement(self, payload):
+        """Live electrical readings from a device that measures.
+
+        Merged rather than replaced: a device reports the electrical and the
+        metering cluster separately, and each carries only its own attributes.
+        """
+        ieee = self._ieee_for_short(payload.get("short_addr"))
+        if not ieee or ieee not in self._registry:
+            return
+        values = self._measurements.setdefault(ieee, {})
+        for key, value in payload.items():
+            if key in ("short_addr", "endpoint", "cluster"):
+                continue
+            values[key] = value
+        self._measured_ms[ieee] = ticks_ms()
+
+    def _learn_capabilities(self, payload):
+        caps = payload.get("capabilities")
+        if isinstance(caps, list):
+            self._capabilities = tuple(caps)
+
+    def _on_device_left(self, payload):
+        """A device announced it is leaving the mesh.
+
+        Without this the registry kept a departed device forever and every
+        command to it burned the full ack timeout. ``rejoin`` means it intends
+        to come straight back, so only a real departure clears the entry.
+        """
+        ieee = payload.get("ieee_addr") or \
+            self._ieee_for_short(payload.get("short_addr"))
+        if not ieee or ieee not in self._registry:
+            return
+        if payload.get("rejoin"):
+            self._suspect[ieee] = True
+            return
+        self._registry.pop(ieee, None)
+        self._states.pop(ieee, None)
+        self._state_ms.pop(ieee, None)
+        self._expected.pop(ieee, None)
+        self._suspect.pop(ieee, None)
+        self._reporting_retry.pop(ieee, None)
+        self._save_registry()
+        self._log("zigbee device left:", ieee)
 
     def _on_state(self, payload):
         ieee = self._ieee_for_short(payload.get("short_addr"))
         if not ieee or "on_off" not in payload:
             return
+        self._expected.pop(ieee, None)   # the device spoke; stop guessing
         self._states[ieee] = bool(payload["on_off"])
         self._state_ms[ieee] = ticks_ms()
         self._suspect.pop(ieee, None)  # it spoke — clearly reachable
@@ -310,8 +607,55 @@ class ZigbeeGateway(DeviceGateway):
             code = (reply.get("payload") or {}).get("code",
                                                     "coordinator_error")
             return {"status": "error", "error": code, "command_id": rid}
-        return {"status": "sent_to_zigbee", "command_id": rid,
-                "reply": reply.get("payload") or {}}
+        payload = reply.get("payload") or {}
+        status = self._ack_status(op, reply)
+        result = {"status": status, "command_id": rid, "reply": payload}
+        if status == "error":
+            result["error"] = "not_delivered (aps_status={})".format(
+                payload.get("aps_status"))
+        return result
+
+    def _ack_status(self, op, reply):
+        """Map the coordinator's ACK rung onto the port's delivery contract.
+
+        The distinction the port already draws (``accepted_by_h2`` is *not* in
+        EXECUTION_SUCCESS_STATUSES, ``confirmed_by_device`` is) only becomes
+        real once the coordinator can tell the two apart. So:
+
+        * ``delivered`` -- the device's own radio confirmed the frame. Real
+          proof; the Executor may journal the event.
+        * anything else from a delivery-capable coordinator -- the command was
+          taken but never confirmed. ``accepted_by_h2`` keeps it out of the
+          journal, so the Executor retries and, failing that, a schedule stays
+          eligible for catch-up instead of being recorded as done.
+        * a coordinator without the capability -- unchanged ``sent_to_zigbee``.
+          Product B's NanoC6 keeps working on its existing firmware; nothing
+          here requires a lockstep flash.
+
+        The ladder applies only to ops aimed at a *device*. ping and
+        permit_join are the coordinator answering about itself, with no device
+        to confirm anything -- downgrading their perfectly good acks to
+        "unproven" made a successful ping look like a failure to ``ping()``,
+        which then left the circuit breaker latched open for good. Caught on
+        hardware, invisible to every test that did not involve a coordinator
+        advertising delivery_ack.
+        """
+        status = reply.get("status")
+        if op not in _DEVICE_OPS:
+            return "sent_to_zigbee"
+        if status == "delivered":
+            return "confirmed_by_device"
+        if status == "failed":
+            # The coordinator is telling us outright that the command did not
+            # reach the device. Read from the ack's own status, never inferred
+            # from capabilities: a gateway that has not pinged yet has none,
+            # and this used to fall through to sent_to_zigbee -- so a command
+            # to an unplugged relay was journaled as executed and never retried.
+            # Measured on hardware 2026-08-04 against a powered-off switch.
+            return "error"
+        if "delivery_ack" in self._capabilities:
+            return "accepted_by_h2"
+        return "sent_to_zigbee"
 
     def _probe_link(self):
         """Fire one background ping to classify a command timeout. At most
@@ -337,6 +681,8 @@ class ZigbeeGateway(DeviceGateway):
         the breaker."""
         while True:
             await self.ping()
+            if not self._down:
+                self.pump_reporting()
             await asyncio.sleep(
                 (_WATCHDOG_DOWN_MS if self._down else _WATCHDOG_UP_MS)
                 / 1000)
@@ -357,29 +703,87 @@ class ZigbeeGateway(DeviceGateway):
             return {"status": "error", "error": str(exc),
                     "command_id": event_id}
 
-        results = []
-        for n, (ieee, short, zcl_ep) in enumerate(targets):
-            rid = "{}-{}".format(event_id, n) if len(targets) > 1 else event_id
-            if action == "toggle":
-                result = await self._toggle(ieee, short, zcl_ep, rid)
-            else:
-                result = await self._command(
-                    "on_off",
-                    {"state": action, "short_addr": short,
-                     "endpoint": zcl_ep},
-                    rid=rid)
-            if result["status"] == "timeout" and not self._down:
-                # Coordinator link looks fine but this device is silent —
-                # the classic stale short_addr after an unseen rejoin.
-                self._suspect[ieee] = True
-            results.append(result)
-
+        results = await self._deliver(targets, action, event_id)
         worst = _worst_status(results)
         outcome = {"status": worst, "command_id": event_id}
         errors = [r.get("error") for r in results if r.get("error")]
         if errors:
             outcome["error"] = "; ".join(errors)
         return outcome
+
+    async def _deliver(self, targets, action, event_id):
+        """Deliver to every target, at most ``_COMMAND_WINDOW`` at a time.
+
+        A group used to be delivered strictly one device at a time, each
+        waiting out its own round-trip. That is safe but does not scale: at the
+        1500 ms ack timeout a fifty-lamp group took over a minute before the
+        last lamp came on, which for a Shabbat schedule is a visible failure
+        even though every command "worked".
+
+        A window, not a rate — the same reasoning as pump_reporting. The
+        resource is the coordinator's request table, so bound what is
+        outstanding and let throughput be whatever the radio sustains.
+        Deliberately a worker pool rather than fixed batches: one slow device
+        must not hold up the three beside it.
+        """
+        results = [None] * len(targets)
+        if len(targets) == 1:
+            results[0] = await self._deliver_one(targets[0], action, event_id)
+            return results
+
+        # No await between the read and the write, so on a single-threaded
+        # loop this hand-off needs no lock.
+        cursor = [0]
+
+        async def worker():
+            while True:
+                index = cursor[0]
+                if index >= len(targets):
+                    return
+                cursor[0] = index + 1
+                rid = "{}-{}".format(event_id, index)
+                try:
+                    results[index] = await self._deliver_one(
+                        targets[index], action, rid)
+                except Exception as exc:
+                    # send() promises never to raise on a delivery problem;
+                    # one worker must not break that for the whole group.
+                    results[index] = {"status": "error", "error": str(exc),
+                                      "command_id": rid}
+
+        # Held in a local until gather returns: on MicroPython a task nobody
+        # references is collected before it runs (see panel_mp/bridge.py).
+        workers = []
+        for _ in range(min(_COMMAND_WINDOW, len(targets))):
+            workers.append(asyncio.create_task(worker()))
+        await asyncio.gather(*workers)
+        return results
+
+    def _expect(self, ieee, action):
+        """Believe our own command until the device says otherwise."""
+        self._expected[ieee] = (action == "on")
+
+    async def _deliver_one(self, target, action, rid):
+        ieee, short, zcl_ep = target
+        if action == "toggle":
+            result = await self._toggle(ieee, short, zcl_ep, rid)
+        else:
+            # Set before the round trip, not after: a poll landing while the
+            # command is still in flight would otherwise read the pre-command
+            # state and undo the UI's optimistic update.
+            self._expect(ieee, action)
+            result = await self._command(
+                "on_off",
+                {"state": action, "short_addr": short, "endpoint": zcl_ep},
+                rid=rid)
+            if result["status"] not in EXECUTION_SUCCESS_STATUSES:
+                # It did not get through, so stop claiming it did.
+                self._expected.pop(ieee, None)
+        if result["status"] == "timeout" and not self._down:
+            # Coordinator link looks fine but this device is silent — the
+            # classic stale short_addr after an unseen rejoin.
+            self._suspect[ieee] = True
+        return result
 
     async def _toggle(self, ieee, short, zcl_ep, rid):
         """Manual-only toggle. Attribute reporting keeps ``_states`` live,
@@ -392,14 +796,23 @@ class ZigbeeGateway(DeviceGateway):
             read = await self._command(
                 "read_attr", {"short_addr": short, "endpoint": zcl_ep},
                 rid=rid + "-r")
-            if read["status"] != "sent_to_zigbee":
+            # Against the success set, not one literal: a delivery-capable
+            # coordinator answers a read with "delivered", which maps to
+            # confirmed_by_device -- comparing to "sent_to_zigbee" alone would
+            # call a perfectly good read a failure. (Same shape as the ping
+            # bug this pattern already caused once.)
+            if read["status"] not in EXECUTION_SUCCESS_STATUSES:
                 return read
             current = bool(read.get("reply", {}).get("on_off"))
-        return await self._command(
+        action = "off" if current else "on"
+        self._expect(ieee, action)
+        result = await self._command(
             "on_off",
-            {"state": "off" if current else "on",
-             "short_addr": short, "endpoint": zcl_ep},
+            {"state": action, "short_addr": short, "endpoint": zcl_ep},
             rid=rid)
+        if result["status"] not in EXECUTION_SUCCESS_STATUSES:
+            self._expected.pop(ieee, None)
+        return result
 
     def _resolve_targets(self, target_type, target_id):
         """Map an event target to [(ieee, short_addr, zcl_endpoint), ...]."""
@@ -443,7 +856,10 @@ class ZigbeeGateway(DeviceGateway):
         # breaker is open, so bypass the fail-fast check in _command.
         was_down, self._down = self._down, False
         result = await self._command("ping", None)
-        if result["status"] != "sent_to_zigbee" and was_down:
+        # Set membership, not one literal. _ack_status keeps ping on
+        # sent_to_zigbee today, but a future rung would silently re-latch the
+        # breaker here -- which is exactly how this broke the first time.
+        if result["status"] not in EXECUTION_SUCCESS_STATUSES and was_down:
             self._down = True
         return result
 
@@ -460,10 +876,28 @@ class ZigbeeGateway(DeviceGateway):
             {"short_addr": entry["short_addr"],
              "endpoint": entry.get("endpoint", 1)})
 
+    async def read_report_config(self, ieee):
+        """What reporting interval the device is ACTUALLY running.
+
+        Diagnostic, not part of the control path. It exists because we ask
+        every device for min_interval = 0 and one of them reports every ~3
+        seconds regardless -- devices clamp to their own minimum, and nothing
+        else in the system can tell that from a broken configuration.
+        """
+        entry = self._registry.get(ieee)
+        if entry is None:
+            return {"status": "error", "error": "unknown device",
+                    "command_id": ""}
+        return await self._command(
+            "read_report_cfg",
+            {"short_addr": entry["short_addr"],
+             "endpoint": entry.get("endpoint", 1)})
+
     def forget_device(self, ieee):
         entry = self._registry.pop(ieee, None)
         self._states.pop(ieee, None)
         self._state_ms.pop(ieee, None)
+        self._expected.pop(ieee, None)
         self._save_registry()
         if entry is None:
             return {"removed": False}
@@ -473,11 +907,18 @@ class ZigbeeGateway(DeviceGateway):
         return {"removed": True}
 
 
+# Weakest-first. A group is only as good as its worst member: a partial
+# failure must stay retryable, and on_off retries are idempotent. Note
+# accepted_by_h2 ranks below sent_to_zigbee -- it is the rung that means "taken
+# but not proven", so a group containing one unproven member must not be
+# journaled on the strength of the others.
+_STATUS_RANK = ("error", "timeout", "accepted_by_h2", "sent_to_zigbee",
+                "confirmed_by_device", "observed_state")
+
+
 def _worst_status(results):
-    # error > timeout > success: a partial group failure must stay
-    # retryable, and on_off retries are idempotent.
-    statuses = [r["status"] for r in results]
-    for status in ("error", "timeout"):
+    statuses = set(r["status"] for r in results)
+    for status in _STATUS_RANK:
         if status in statuses:
             return status
     return "sent_to_zigbee"

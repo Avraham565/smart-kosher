@@ -1,4 +1,4 @@
-"""UART line codec: '<crc32hex> <json>\\n' envelope (UART_PROTOCOL.md §Envelope)."""
+"""UART line codec: '<crc32hex> <json>\\n' envelope (docs/UART_PROTOCOL.md)."""
 
 import binascii
 import json as _json
