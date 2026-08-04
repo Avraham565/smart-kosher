@@ -56,12 +56,17 @@ _JOURNAL_MAX_RECORDS = 128
 class Brain:
     """The composed brain: one Api plus the handles the UI/refresh tasks need."""
 
-    def __init__(self, api, repository, settings, views, gateway):
+    def __init__(self, api, repository, settings, views, gateway, executor):
         self.api = api
         self.repository = repository
         self.settings = settings
         self.views = views
         self.gateway = gateway
+        # Exposed for the scheduler task (scheduler.py), which plans events
+        # itself and needs the *same* executor -- and therefore the same
+        # journal -- as the UI's manual control path, so a schedule and a tap
+        # can never double-send or lose each other's dedup history.
+        self.executor = executor
 
 
 def _status_info_for(gateway):
@@ -123,4 +128,4 @@ def create(data_dir=DATA_DIR, repository=None, gateway=None, defaults=None,
         status_info=_status_info_for(gateway),
         zigbee=gateway if zigbee else None,
     )
-    return Brain(api, repository, settings, views, gateway)
+    return Brain(api, repository, settings, views, gateway, executor)
