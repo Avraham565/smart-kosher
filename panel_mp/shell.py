@@ -1,13 +1,15 @@
 # App shell — the reusable frame every non-home page shares, so pages differ
 # only in their content, never in their chrome. MicroPython twin of
-# panel/main/ui/shell.c. A fresh screen with a thin 64px header (title on the
+# the C firmware's shell.c (deleted 2026-08-05; see experiments/_archive).
+# A fresh screen with a thin 64px header (title on the
 # right = RTL reading start, "חזרה" on the left, optional corner clock) over an
 # empty body. Back always returns home. Static page, instant swap.
 
 import lvgl as lv
-import theme
+
 import clock
-from widgets import w_label, w_header, w_stripe
+import theme
+from widgets import w_header, w_label, w_stripe
 
 # Corner clock on sub-pages: product decision still open. True = always-visible
 # time in the sub-page header (the mockup showed it); False = title + back only.

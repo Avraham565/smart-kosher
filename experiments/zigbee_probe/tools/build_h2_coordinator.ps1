@@ -35,8 +35,23 @@ Copy-Item -Force  (Join-Path $sourceRoot "sdkconfig.defaults*") $BuildRoot
 Copy-Item -Force  (Join-Path $sourceRoot "partitions.csv")     $BuildRoot
 Copy-Item -Recurse -Force (Join-Path $sourceRoot "main")       $BuildRoot
 
-$wslBuild   = Convert-ToWslPath $BuildRoot
-$wslCommand = "source ~/esp/esp-idf/export.sh && cd $wslBuild && idf.py set-target $Target && idf.py build"
+# Carry the dependency lock into the throwaway build dir, and back out again
+# afterwards. Because this script builds in a fresh C:\tmp copy, the lock the
+# component manager writes used to be discarded with it -- so every build
+# re-resolved esp-zigbee-lib from the registry and nothing recorded which
+# version the flashed firmware was actually built from. Round-tripping it makes
+# a dependency change show up as a diff in git instead of silently.
+$lockName   = "dependencies.lock"
+$sourceLock = Join-Path $sourceRoot $lockName
+if (Test-Path $sourceLock) { Copy-Item -Force $sourceLock $BuildRoot }
+
+$wslBuild = Convert-ToWslPath $BuildRoot
+# Announce the toolchain before building. idf_component.yml can only reject an
+# incompatible IDF, never choose one -- the version that actually compiles this
+# firmware is whatever export.sh here happens to set up. Printing it makes a
+# silently upgraded toolchain visible at the top of the log instead of only
+# afterwards, in the dependencies.lock diff.
+$wslCommand = "source ~/esp/esp-idf/export.sh && echo '--- toolchain ---' && idf.py --version && cd $wslBuild && idf.py set-target $Target && idf.py build"
 
 $ErrorActionPreference = "Continue"
 wsl bash -lc $wslCommand
@@ -44,6 +59,12 @@ $buildExitCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 if ($buildExitCode -ne 0) {
     throw "ESP-IDF build failed with exit code $buildExitCode"
+}
+
+$builtLock = Join-Path $BuildRoot $lockName
+if (Test-Path $builtLock) {
+    Copy-Item -Force $builtLock $sourceLock
+    Write-Host "dependency lock updated: $sourceLock (review the git diff)"
 }
 
 New-Item -ItemType Directory -Force $FlashOut | Out-Null

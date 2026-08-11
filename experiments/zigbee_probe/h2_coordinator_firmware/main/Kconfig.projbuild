@@ -6,7 +6,7 @@ menu "Smart Kosher H2 Coordinator"
 
     config COORD_FW_VERSION
         string "Firmware version reported over the link"
-        default "0.11.2"
+        default "0.12.0"
         help
             0.8.0 first proved delivery: on_off is acked only once the
             device's own radio confirms the frame, so the hub can tell
@@ -18,6 +18,29 @@ menu "Smart Kosher H2 Coordinator"
             device what interval it is actually running, because asking for
             min_interval = 0 and getting a report every 3 seconds were both
             true at once. See docs/h2_production_plan.md.
+
+            0.10.0 adds cluster discovery: ZDO Simple_Desc after a join
+            reports what each endpoint actually carries, so "does this relay
+            measure power?" is answered by the device instead of by its model
+            number.
+
+            0.11.x added electrical measurement reporting (0x0702 metering,
+            0x0B04 electrical measurement) alongside OnOff. It never worked --
+            both clusters answered configure_send_failed, two hypotheses were
+            tried and neither fixed it.
+
+            0.12.0 REMOVES electrical measurement entirely (product decision,
+            2026-08-05): the reportable-attribute table, the value decoding,
+            the measurement_report event, and the measurement cluster
+            descriptors on our own endpoint are all gone. Cluster DISCOVERY
+            stays -- it answers "what can this device do", which is what
+            multi-gang support needs, and has nothing to do with measuring.
+
+            A useful side effect: reporting is now only ever configured for
+            OnOff, so a device can never have two configure transactions open
+            at once. The ambiguity in matching their responses -- which could
+            report a metering failure as an OnOff failure and knock a healthy
+            device out of reporting -- is gone by construction.
 
     config COORD_MAX_CHILDREN
         int "Max devices that may join the coordinator directly"

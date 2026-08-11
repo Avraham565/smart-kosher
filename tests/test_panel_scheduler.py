@@ -1,11 +1,14 @@
-"""Panel scheduler (panel_mp/scheduler.py) on CPython.
+"""The scheduler on CPython, against product A's real composition.
 
-The scheduler is the piece that makes a saved schedule fire, and it only ever
-runs on the panel -- so these tests exercise it against the real in-process
-composition (panel_mp/brain.py + the H2 simulator) with an injected clock,
-which is as close to the device as we get without hardware. panel_mp lives at
-the board root rather than in the installed package, hence the path insert;
-brain.py and scheduler.py import no LVGL, which is what makes this possible.
+The scheduler is the piece that makes a saved schedule fire. It lives in the
+brain now (smart_kosher.application.scheduler) and is imported normally; these
+tests drive it against the panel's actual in-process composition
+(panel_mp/brain.py + the H2 simulator) with an injected clock, which is as
+close to the device as we get without hardware.
+
+The path insert is only for ``brain`` -- panel_mp lives at the board root
+rather than in the installed package. It imports no LVGL, which is what makes
+running it here possible.
 """
 
 import asyncio
@@ -14,15 +17,15 @@ import shutil
 import sys
 import unittest
 
+from smart_kosher.application import scheduler
+from smart_kosher.application.planner import Planner
+
 sys.path.insert(
     0,
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "panel_mp"),
 )
 
 import brain  # noqa: E402  (needs the path insert above)
-import scheduler  # noqa: E402
-
-from smart_kosher.application.planner import Planner  # noqa: E402
 
 TEMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_panel_tmp")
 

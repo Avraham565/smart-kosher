@@ -215,6 +215,30 @@ undocumented assumption about which lock the stack holds while calling back.
       network still forms, and confirm 11+ devices join directly. Left at the
       proven value until there is hardware to try it on.
 
+## Removed: electrical measurement (0.12.0, 2026-08-05)
+
+0.10.0 added cluster discovery and 0.11.x built measurement reporting on top of
+it. Measurement never worked — both clusters answered `configure_send_failed`,
+two hypotheses were tried and neither fixed it — and rather than a third round
+of guessing it was **removed** as a product decision: a missed reading costs a
+number, and the effort is better spent where a miss costs a Shabbat.
+
+Gone: the reportable-attribute table's measurement rows, ZCL value decoding,
+the `measurement_report` event, the metering cluster descriptors on the
+coordinator's own endpoint, and everything downstream of them in
+`zigbee_gateway.py`.
+
+Kept: **cluster discovery**. It answers "what can this endpoint do", which is
+what multi-gang support needs, and it is independent of measuring anything.
+
+Closes W3.4's remaining ambiguity for free. With OnOff the only configurable
+cluster, a device can never have two configure transactions open at once — so
+the `on_config_report_rsp` matching (oldest open configure for that address,
+because a Configure Reporting Response carries no cluster) can no longer
+mis-attribute a metering failure to OnOff. If measurement is ever revived, that
+correlation must be fixed first — by TSN, which `config_report_confirm_cb` does
+not currently record.
+
 ## What we are deliberately keeping
 
 The CRC32+JSON line envelope (proven, terminal-debuggable — not switching to

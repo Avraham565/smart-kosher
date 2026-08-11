@@ -25,11 +25,11 @@ import lvgl as lv
 import brain
 import display
 import lvgl_loop
-import scheduler
 import store
 import theme
 import toast
 import ui_home
+from smart_kosher.application import scheduler
 
 _STATUS_PERIOD_S = 5
 _CLOCK_PERIOD_S = 10

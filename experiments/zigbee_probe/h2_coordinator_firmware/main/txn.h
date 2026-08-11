@@ -59,10 +59,13 @@ typedef struct {
     bool       has_rid;
     uint16_t   short_addr;
     uint8_t    endpoint;
-    /* Which cluster the request is about. Set by the caller after alloc --
-     * reporting is now configured per cluster (OnOff, and the metering
-     * clusters on devices that carry them), and the bind result has to know
-     * which one it is completing. */
+    /* Which cluster the request is about. Set by the caller after alloc, and
+     * carried through to the reporting verdict so the hub knows what the
+     * verdict is about. Only OnOff is configurable now that measurement is
+     * gone, so it is always 0x0006 in practice -- kept because the field is
+     * what makes a `reporting_failed` event unambiguous, and because a request
+     * for any other cluster must fail loudly rather than be assumed to be
+     * OnOff. */
     uint16_t   cluster;
     uint8_t    tsn;          /* filled in once the stack reports it */
     bool       has_tsn;

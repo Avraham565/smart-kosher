@@ -19,10 +19,10 @@
 # SPIRAM XIP. PCLK 12.5 MHz is the lvgl_micropython maintainer's value for this
 # exact 800x480 panel class (discussion #511).
 
-from machine import I2C, Pin
 import lcd_bus
-import rgb_display
 import lvgl as lv
+import rgb_display
+from machine import I2C, Pin
 
 # --- pin map (validated on this board) --------------------------------------
 _RGB_DATA = [

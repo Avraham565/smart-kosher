@@ -1,5 +1,6 @@
 # HomeScreen — product A wall panel (the idle "wall clock" face). MicroPython
-# twin of panel/main/ui/ui_home.c.
+# twin of the C firmware's ui_home.c (deleted 2026-08-05; see
+# experiments/_archive).
 #
 # Layout (800x480, RTL), all static — no scroll, no animation:
 #   header 110px: logo (right) . clock + Hebrew/Gregorian date (left)
@@ -12,13 +13,14 @@
 # (see clock.py); tapping the clock opens a placeholder.
 
 import lvgl as lv
-import theme
+
 import clock
 import pages
 import settime
 import store
+import theme
 from reactive import effect
-from widgets import w_label, w_group, w_stripe, w_header, w_card_button
+from widgets import w_card_button, w_group, w_header, w_label, w_stripe
 
 _screen = None
 _status = None

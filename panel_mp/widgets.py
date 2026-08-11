@@ -1,9 +1,11 @@
 # Reusable UI components — the small vocabulary every screen is built from, so a
 # working piece is written once and reused, not copy-pasted. MicroPython twin of
-# panel/main/ui/widgets.c. theme.py holds tokens + whole-object style helpers;
-# this holds object factories. All LVGL calls run under the task handler.
+# the C firmware's widgets.c (deleted 2026-08-05; see experiments/_archive).
+# theme.py holds tokens + whole-object style helpers; this holds object
+# factories. All LVGL calls run from the asyncio pump (lvgl_loop.py).
 
 import lvgl as lv
+
 import theme
 
 

@@ -7,6 +7,13 @@
 # beyond the executor's gateway hop -- no LVGL, so it is fully testable on
 # CPython (tests/test_panel_scheduler.py).
 #
+# It lived in panel_mp/ until 2026-08-05, which made automation a property of
+# one product's UI folder rather than of the brain: the headless hub imports the
+# same brain but could not reach this file, so schedules saved there were stored
+# and never fired. It depends on nothing above the application layer, so this is
+# where it belongs. Starting it is still each entry point's job -- one task on
+# whatever loop that product already runs.
+#
 # Two properties carry the whole design:
 #
 #   * event_id is deterministic (schedule + date + minute) and the journal
@@ -28,10 +35,10 @@
 
 import asyncio
 
-from smart_kosher.application.planner import Planner
-from smart_kosher.application.recovery import RecoveryService
-from smart_kosher.application.views import now_utc, planner_config, settings_key
-from smart_kosher.zmanim import gregorian_from_day_number
+from ..zmanim import gregorian_from_day_number
+from .planner import Planner
+from .recovery import RecoveryService
+from .views import now_utc, planner_config, settings_key
 
 # 30s keeps the worst-case lateness of a minute-precision trigger under a
 # minute, at a cost of one cheap "no new minute" check most of the time.
@@ -117,7 +124,15 @@ class Scheduler:
 
     @classmethod
     def for_brain(cls, composed, **kwargs):
-        """Build from a composed :class:`brain.Brain` (the panel's usage)."""
+        """Build from an already-composed application.
+
+        ``composed`` is anything exposing ``repository``, ``settings`` and
+        ``executor`` -- duck-typed rather than imported, so this stays free of
+        any one product's composition root (panel_mp.brain.Brain today).
+        Sharing the *executor* is the load-bearing part: the schedule path and
+        the UI's manual-control path must go through the same journal, or a tap
+        and a schedule can double-send or lose each other's dedup history.
+        """
         return cls(composed.repository, composed.settings, composed.executor,
                    **kwargs)
 

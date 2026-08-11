@@ -1,6 +1,7 @@
-# Design tokens mirroring product B's web UI (client/ui/style.css :root) and the
-# C panel's theme.h 1:1, so both faces of the product match. This is the
-# MicroPython twin of panel/main/ui/theme.h.
+# Design tokens mirroring product B's web UI (client/ui/style.css :root), so
+# both faces of the product match. Originally kept 1:1 with the C firmware's
+# theme.h, which was deleted 2026-08-05 (see experiments/_archive) -- this is
+# now the only copy.
 #
 # Fonts load at runtime (lv.binfont_create) after the display is up, so unlike
 # the C build they can't be compile-time constants. load_fonts() fills FONTS;

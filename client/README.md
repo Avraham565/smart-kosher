@@ -1,5 +1,11 @@
 # Smart Kosher — desktop client
 
+> **Status: paused (2026-08-05).** This is the client for **product B**, the
+> headless AtomS3 hub, which is not being worked on right now. Product A (the
+> wall panel) is its own client and does not use this. See the repo README.
+> Note that product B currently never fires schedules — see
+> `deploy/atoms3/main.py`.
+
 Windows app for the hub: a local bridge process plus the product UI in a
 native window (pywebview / Edge WebView2).
 

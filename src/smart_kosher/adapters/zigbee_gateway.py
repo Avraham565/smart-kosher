@@ -130,12 +130,6 @@ class ZigbeeGateway(DeviceGateway):
         self._reporting_retry = {}
         # ieee -> credit expiry, for requests sent and not yet answered.
         self._reporting_inflight = {}
-        # ieee -> {"active_power": .., "rms_voltage": .., "age_ms": ..} for
-        # devices that carry a metering cluster. Passed through as the device
-        # sends it -- raw and unscaled; deciding what a number means is a job
-        # for whoever displays it.
-        self._measurements = {}
-        self._measured_ms = {}
         # What the coordinator says it can do, learned from boot/ping. Empty
         # for firmware that predates the advertisement, which is exactly how
         # an old build keeps its old (looser) semantics.
@@ -189,10 +183,6 @@ class ZigbeeGateway(DeviceGateway):
             retry = self._reporting_retry.get(ieee)
             if retry and retry.get("error"):
                 item["reporting_error"] = retry["error"]
-            if ieee in self._measurements:
-                item["measurements"] = dict(self._measurements[ieee])
-                item["measured_age_ms"] = ticks_diff(
-                    ticks_ms(), self._measured_ms[ieee])
             out[ieee] = item
         return out
 
@@ -254,8 +244,6 @@ class ZigbeeGateway(DeviceGateway):
                 self._on_device_endpoints(payload)
             elif op == "device_clusters":
                 self._on_device_clusters(payload)
-            elif op == "measurement_report":
-                self._on_measurement(payload)
             elif op == "device_left":
                 self._on_device_left(payload)
             elif op == "network_down":
@@ -339,15 +327,17 @@ class ZigbeeGateway(DeviceGateway):
 
         # ``reporting`` means one specific thing: this device will tell us when
         # its own wall switch is pressed. Only the OnOff cluster answers that.
-        # A verdict about a metering cluster used to land here too, so a failed
-        # measurement configure flipped a perfectly healthy device to
-        # reporting=false and started retrying it -- and once measurements work,
-        # a metering success would have masked a genuine OnOff failure.
+        #
+        # This hub no longer asks for any other cluster -- electrical
+        # measurement was removed -- but the guard stays, because a coordinator
+        # still running 0.11.x can be mid-flight with a metering configure of
+        # its own. Its failure verdict must not knock a healthy device out of
+        # reporting, which is exactly what happened before this check existed.
         # Firmware that predates the cluster field only ever asked about OnOff.
         cluster = payload.get("cluster", _CLUSTER_ON_OFF)
         if cluster != _CLUSTER_ON_OFF:
             if not ok:
-                self._log("zigbee measurement reporting failed for", ieee,
+                self._log("zigbee non-OnOff reporting failed for", ieee,
                           hex(cluster), payload.get("reason"))
             return
 
@@ -422,12 +412,6 @@ class ZigbeeGateway(DeviceGateway):
             self._request_reporting(ieee, self._registry[ieee],
                                     self._reporting_retry[ieee]["attempts"])
 
-    # Cluster ids worth naming. A relay that carries either of these can
-    # measure electricity; one that carries neither cannot, whatever the
-    # datasheet suggests. Until discovery existed there was no way to tell,
-    # because the coordinator only ever spoke OnOff.
-    _METERING_CLUSTERS = {0x0702: "metering", 0x0B04: "electrical_measurement"}
-
     def _on_device_endpoints(self, payload):
         """The device's real endpoint list, discovered after it joined.
 
@@ -443,8 +427,13 @@ class ZigbeeGateway(DeviceGateway):
         self._log("zigbee endpoints for", ieee, endpoints)
 
     def _on_device_clusters(self, payload):
-        """What one endpoint can do. Recorded so capability questions are
-        answered from the device rather than from its model number."""
+        """What one endpoint can do, recorded per endpoint.
+
+        Kept after electrical measurement was dropped, because the question it
+        answers is not about measuring: a two-gang switch exposes OnOff on both
+        endpoint 1 and endpoint 2, and that has to be learned from the device
+        rather than assumed from its model number.
+        """
         ieee = self._ieee_for_short(payload.get("short_addr"))
         clusters = payload.get("in_clusters")
         if not ieee or not isinstance(clusters, list):
@@ -452,39 +441,9 @@ class ZigbeeGateway(DeviceGateway):
         entry = self._registry[ieee]
         found = entry.setdefault("clusters", {})
         found[str(payload.get("endpoint", 1))] = clusters
-        measures = sorted(self._METERING_CLUSTERS[c]
-                          for c in clusters if c in self._METERING_CLUSTERS)
-        if measures:
-            entry["measures"] = measures
-            # Best effort, and deliberately so: unlike OnOff reporting -- which
-            # control correctness depends on and which therefore gets retries --
-            # a missing measurement costs a reading, not a schedule. It is
-            # requested once here and left alone.
-            for cluster in clusters:
-                if cluster in self._METERING_CLUSTERS:
-                    self._write_cmd("enable_reporting", {
-                        "short_addr": entry["short_addr"],
-                        "endpoint": payload.get("endpoint", 1),
-                        "cluster": cluster})
         self._save_registry()
         self._log("zigbee clusters for", ieee, payload.get("endpoint"),
-                  clusters, measures)
-
-    def _on_measurement(self, payload):
-        """Live electrical readings from a device that measures.
-
-        Merged rather than replaced: a device reports the electrical and the
-        metering cluster separately, and each carries only its own attributes.
-        """
-        ieee = self._ieee_for_short(payload.get("short_addr"))
-        if not ieee or ieee not in self._registry:
-            return
-        values = self._measurements.setdefault(ieee, {})
-        for key, value in payload.items():
-            if key in ("short_addr", "endpoint", "cluster"):
-                continue
-            values[key] = value
-        self._measured_ms[ieee] = ticks_ms()
+                  clusters)
 
     def _learn_capabilities(self, payload):
         caps = payload.get("capabilities")

@@ -1,10 +1,12 @@
 # Page registry — the neutral catalogue of destinations. MicroPython twin of
-# panel/main/ui/page.{c,h}. It knows nothing about how the home screen arranges
+# the C firmware's page.{c,h} (deleted 2026-08-05; see experiments/_archive).
+# It knows nothing about how the home screen arranges
 # them (hero+4, a row, a grid); layout is purely a home-UI decision. Each page
 # is a lazily-built placeholder for now: shell chrome (title + back) over an
 # empty body. Real content fills the body per page later.
 
 import lvgl as lv
+
 import shell
 
 # Page ids (index into _DEFS / _screens).

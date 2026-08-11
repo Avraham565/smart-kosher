@@ -15,8 +15,6 @@
 
 #include "esp_zigbee.h"
 #include "ezbee/zha.h"
-#include "ezbee/zcl/cluster/electrical_measurement_desc.h"
-#include "ezbee/zcl/cluster/metering_desc.h"
 
 #include "link.h"
 #include "protocol.h"
@@ -141,90 +139,39 @@ static void send_error(const char *rid, const char *code, const char *msg)
     cJSON_Delete(root);
 }
 
-/* ── measurement clusters ───────────────────────────────────────── */
+/* ── reportable attributes ──────────────────────────────────────── */
 
 #define CLUSTER_ON_OFF       0x0006
-#define CLUSTER_METERING     0x0702
-#define CLUSTER_ELECTRICAL   0x0B04
 
-/* Attributes we ask a capable device to report, with the ZCL type each one
- * carries. The firmware owns this table rather than the panel: these are ZCL
- * facts, and a hub that had to supply attribute types would be encoding the
- * same knowledge one layer further from the radio. */
+/*
+ * ELECTRICAL MEASUREMENT WAS REMOVED (2026-08-05, product decision).
+ *
+ * 0.11.x could discover the metering (0x0702) and electrical measurement
+ * (0x0B04) clusters, ask a capable relay to report them, decode the values and
+ * forward them to the panel. It never worked -- both clusters answered
+ * configure_send_failed -- and after two failed rounds of diagnosis the feature
+ * was dropped rather than debugged further.
+ *
+ * What that also removes: reporting is now only ever configured for OnOff, so
+ * a device can never have two configure transactions open at once, and the
+ * response-matching ambiguity between them (a metering failure being reported
+ * as an OnOff failure) is gone by construction rather than by care.
+ *
+ * Cluster DISCOVERY stays -- it answers "what can this device do", which is
+ * what multi-gang needs, and is independent of measuring anything.
+ */
 typedef struct {
     uint16_t cluster;
     uint16_t attr;
     uint8_t  type;
-    /* How much the value must move before the device bothers to report.
-     * ZCL calls this the reportable change, and it is REQUIRED for analog
-     * attributes -- leaving it zero made the stack reject the whole configure
-     * locally (`configure_send_failed`), which is exactly why OnOff worked and
-     * every measurement did not: a boolean is discrete and needs none. */
-    uint32_t change;
     const char *name;
 } report_spec_t;
 
 static const report_spec_t REPORT_SPECS[] = {
-    { CLUSTER_ON_OFF,     0x0000, EZB_ZCL_ATTR_TYPE_BOOL,   0, "on_off"      },
-    /* One raw unit each -- deliberately the most sensitive setting, paired
-     * with a 10 s floor between reports (the user's choice: update every 10 s
-     * on any movement, rather than every 2 s on a large one). What a unit is
-     * worth depends on the device's own divisors, which we do not read yet. */
-    { CLUSTER_ELECTRICAL, 0x050B, EZB_ZCL_ATTR_TYPE_INT16,  1, "active_power"},
-    { CLUSTER_ELECTRICAL, 0x0505, EZB_ZCL_ATTR_TYPE_UINT16, 1, "rms_voltage" },
-    { CLUSTER_ELECTRICAL, 0x0508, EZB_ZCL_ATTR_TYPE_UINT16, 1, "rms_current" },
-    { CLUSTER_METERING,   0x0000, EZB_ZCL_ATTR_TYPE_UINT48, 1, "energy"      },
+    { CLUSTER_ON_OFF, 0x0000, EZB_ZCL_ATTR_TYPE_BOOL, "on_off" },
 };
 #define REPORT_SPEC_COUNT (sizeof(REPORT_SPECS) / sizeof(REPORT_SPECS[0]))
 #define MAX_RECORDS_PER_CLUSTER 3
-
-/* A measurement changes constantly, so unlike OnOff it must not be reported on
- * every flicker -- that would flood the mesh and the link for no benefit. */
-#define MEASURE_MIN_INTERVAL_S 10
-#define MEASURE_MAX_INTERVAL_S 600
-
-static const char *attr_name(uint16_t cluster, uint16_t attr)
-{
-    for (size_t i = 0; i < REPORT_SPEC_COUNT; i++) {
-        if (REPORT_SPECS[i].cluster == cluster && REPORT_SPECS[i].attr == attr) {
-            return REPORT_SPECS[i].name;
-        }
-    }
-    return NULL;
-}
-
-/* ZCL integers are little-endian buffers of a type-dependent width. Decoded
- * bytewise because the payload is not guaranteed to be aligned. */
-static bool zcl_number(uint8_t type, const void *value, double *out)
-{
-    const uint8_t *p = (const uint8_t *)value;
-    int width;
-    bool is_signed = false;
-
-    switch (type) {
-    case EZB_ZCL_ATTR_TYPE_BOOL:   width = 1; break;
-    case EZB_ZCL_ATTR_TYPE_UINT8:  width = 1; break;
-    case EZB_ZCL_ATTR_TYPE_UINT16: width = 2; break;
-    case EZB_ZCL_ATTR_TYPE_UINT24: width = 3; break;
-    case EZB_ZCL_ATTR_TYPE_UINT32: width = 4; break;
-    case EZB_ZCL_ATTR_TYPE_UINT48: width = 6; break;
-    case EZB_ZCL_ATTR_TYPE_INT8:   width = 1; is_signed = true; break;
-    case EZB_ZCL_ATTR_TYPE_INT16:  width = 2; is_signed = true; break;
-    case EZB_ZCL_ATTR_TYPE_INT32:  width = 4; is_signed = true; break;
-    default: return false;
-    }
-
-    uint64_t raw = 0;
-    for (int i = width - 1; i >= 0; i--) raw = (raw << 8) | p[i];
-
-    if (is_signed && (p[width - 1] & 0x80)) {
-        /* Sign-extend: active power is negative when a meter reads export. */
-        *out = (double)((int64_t)raw - ((int64_t)1 << (width * 8)));
-    } else {
-        *out = (double)raw;
-    }
-    return true;
-}
 
 /* ── address helpers ────────────────────────────────────────────── */
 
@@ -639,44 +586,20 @@ static void bind_result_cb(const ezb_zdp_bind_req_result_t *result, void *user_c
     if (slot != NULL) slot->cluster = cluster;
     TXN_UNLOCK();
 
-    /* Every attribute this cluster offers, in one command. OnOff is a boolean
-     * and must report the instant it flips; a measurement changes constantly
-     * and is rate-limited instead, or it would flood the mesh. */
+    /* Every attribute this cluster offers, in one command. OnOff is a boolean:
+     * discrete, so it needs no reportable-change threshold, and it must report
+     * the instant it flips. Any cluster that is not in REPORT_SPECS falls out
+     * with count == 0 below, which is now the whole answer for the measurement
+     * clusters -- they are no longer supported. */
     ezb_zcl_config_report_record_t records[MAX_RECORDS_PER_CLUSTER] = {0};
     uint16_t count = 0;
     for (size_t i = 0; i < REPORT_SPEC_COUNT && count < MAX_RECORDS_PER_CLUSTER; i++) {
         if (REPORT_SPECS[i].cluster != cluster) continue;
         records[count].direction = EZB_ZCL_REPORTING_SEND;
         records[count].attr_id   = REPORT_SPECS[i].attr;
-        records[count].client.attr_type = REPORT_SPECS[i].type;
-        if (cluster == CLUSTER_ON_OFF) {
-            records[count].client.min_interval = 0;
-            records[count].client.max_interval = REPORT_MAX_INTERVAL_S;
-        } else {
-            records[count].client.min_interval = MEASURE_MIN_INTERVAL_S;
-            records[count].client.max_interval = MEASURE_MAX_INTERVAL_S;
-            /* Written through the union member matching the attribute's own
-             * width -- the header is explicit that it "must match attr_type
-             * size", and a mismatch is read as a different number entirely. */
-            switch (REPORT_SPECS[i].type) {
-            case EZB_ZCL_ATTR_TYPE_UINT16:
-                records[count].client.reportable_change.u16 =
-                    (uint16_t)REPORT_SPECS[i].change;
-                break;
-            case EZB_ZCL_ATTR_TYPE_INT16:
-                records[count].client.reportable_change.s16 =
-                    (int16_t)REPORT_SPECS[i].change;
-                break;
-            case EZB_ZCL_ATTR_TYPE_UINT48:
-                records[count].client.reportable_change.u48 =
-                    (uint64_t)REPORT_SPECS[i].change;
-                break;
-            default:
-                records[count].client.reportable_change.u32 =
-                    REPORT_SPECS[i].change;
-                break;
-            }
-        }
+        records[count].client.attr_type   = REPORT_SPECS[i].type;
+        records[count].client.min_interval = 0;
+        records[count].client.max_interval = REPORT_MAX_INTERVAL_S;
         count++;
     }
     if (count == 0) {
@@ -713,8 +636,10 @@ static void cmd_enable_reporting(const char *rid, cJSON *payload)
     if (!short_from_json(payload, &target)) { send_error(rid, "bad_addr", NULL); return; }
     uint8_t ep = endpoint_from_json(payload);
 
-    /* Which cluster to make reportable. Defaults to OnOff so an older hub is
-     * unaffected; a hub that discovered metering clusters asks for those too. */
+    /* Which cluster to make reportable. OnOff is the only one supported since
+     * measurement was removed; the field is still accepted so a hub that still
+     * asks for a measurement cluster gets a clear `unsupported_cluster` failure
+     * rather than silence. Omitting it means OnOff. */
     uint16_t cluster = CLUSTER_ON_OFF;
     cJSON *c = cJSON_GetObjectItemCaseSensitive(payload, "cluster");
     if (cJSON_IsNumber(c)) cluster = (uint16_t)c->valueint;
@@ -904,13 +829,11 @@ static void active_ep_cb(const ezb_zdo_active_ep_req_result_t *result,
 /*
  * What a given endpoint can actually DO -- its cluster list.
  *
- * Active_EP alone answers "how many endpoints", which is enough for a
- * multi-gang switch but not for "does this device measure power?". That
- * question had no answer at all before: the firmware only ever touches
- * cluster 0x0006 (OnOff) and discards every report from any other cluster, so
- * a metering device would have been indistinguishable from a plain relay.
- * Here the device says what it supports and the hub can stop guessing from
- * the model number.
+ * Active_EP alone answers "how many endpoints"; this answers "and what can
+ * each one do". Kept after electrical measurement was removed, because the
+ * question it exists to answer is not about measuring: a two-gang switch
+ * exposes OnOff on endpoint 1 AND endpoint 2, and the hub has to learn that
+ * from the device rather than from its model number.
  */
 static void simple_desc_cb(const ezb_zdo_simple_desc_req_result_t *result,
                            void *user_ctx)
@@ -1094,57 +1017,24 @@ static void on_report_attr(ezb_zcl_cmd_report_attr_message_t *rpt)
         src = rpt->in.header->src_addr.u.short_addr;
         ep  = rpt->in.header->src_ep;
     }
+    /* OnOff only. Reports from any other cluster are dropped: electrical
+     * measurement was removed as a product decision, so nothing else is ever
+     * configured to report and anything that arrives is unsolicited. */
+    if (cluster != CLUSTER_ON_OFF) return;
+
     char short_s[8];
     short_to_str(src, short_s, sizeof(short_s));
 
-    if (cluster == CLUSTER_ON_OFF) {
-        for (ezb_zcl_report_attr_variable_t *var = rpt->in.variables;
-             var != NULL; var = var->next) {
-            if (var->attr_id != 0x0000 || !var->attr_value) continue;
-            cJSON *p = cJSON_CreateObject();
-            cJSON_AddStringToObject(p, "short_addr", short_s);
-            cJSON_AddNumberToObject(p, "endpoint",   ep);
-            cJSON_AddBoolToObject(p, "on_off",
-                                  (*(uint8_t *)var->attr_value) != 0);
-            send_event("attribute_report", p);
-            break;
-        }
-        return;
-    }
-
-    if (cluster != CLUSTER_METERING && cluster != CLUSTER_ELECTRICAL) return;
-
-    /* Measurements are passed straight through, undivided and uninterpreted.
-     * The raw value plus its cluster is everything the hub needs to make sense
-     * of it later; scaling by the device's own divisors is a decision for the
-     * layer that decides to display it. Until this existed the firmware
-     * discarded every report that was not OnOff, so a metering relay was
-     * indistinguishable from a plain one. */
-    cJSON *p = cJSON_CreateObject();
-    cJSON_AddStringToObject(p, "short_addr", short_s);
-    cJSON_AddNumberToObject(p, "endpoint",   ep);
-    cJSON_AddNumberToObject(p, "cluster",    cluster);
-
-    bool any = false;
     for (ezb_zcl_report_attr_variable_t *var = rpt->in.variables;
          var != NULL; var = var->next) {
-        double value;
-        if (!var->attr_value) continue;
-        if (!zcl_number(var->attr_type, var->attr_value, &value)) continue;
-        const char *name = attr_name(cluster, var->attr_id);
-        if (name != NULL) {
-            cJSON_AddNumberToObject(p, name, value);
-        } else {
-            char key[16];
-            snprintf(key, sizeof(key), "attr_%u", (unsigned)var->attr_id);
-            cJSON_AddNumberToObject(p, key, value);
-        }
-        any = true;
-    }
-    if (any) {
-        send_event("measurement_report", p);
-    } else {
-        cJSON_Delete(p);
+        if (var->attr_id != 0x0000 || !var->attr_value) continue;
+        cJSON *p = cJSON_CreateObject();
+        cJSON_AddStringToObject(p, "short_addr", short_s);
+        cJSON_AddNumberToObject(p, "endpoint",   ep);
+        cJSON_AddBoolToObject(p, "on_off",
+                              (*(uint8_t *)var->attr_value) != 0);
+        send_event("attribute_report", p);
+        break;
     }
 }
 
@@ -1328,23 +1218,12 @@ void zb_task(void *arg)
     ezb_af_ep_desc_t               ep     =
         ezb_zha_create_on_off_switch(COORD_EP, &sw_cfg);
 
-    /* Declare the measurement clusters on our own endpoint, as CLIENT.
-     *
-     * The preset above makes this endpoint an OnOff switch and nothing else,
-     * and the stack refuses to send a ZCL frame on a cluster its own endpoint
-     * does not carry -- which is why configure_reporting for the metering
-     * clusters was rejected locally (`configure_send_failed`) while the
-     * identical call for OnOff succeeded. Client role because the direction is
-     * the device's server reporting to us.
-     */
-    ezb_zcl_cluster_desc_t elec = ezb_zcl_electrical_measurement_create_cluster_desc(
-        NULL, EZB_ZCL_CLUSTER_CLIENT);
-    ezb_zcl_cluster_desc_t meter = ezb_zcl_metering_create_cluster_desc(
-        NULL, EZB_ZCL_CLUSTER_CLIENT);
-    if (elec != NULL) ezb_af_endpoint_add_cluster_desc(ep, elec);
-    if (meter != NULL) ezb_af_endpoint_add_cluster_desc(ep, meter);
-    ESP_LOGI(TAG, "measurement clusters registered: elec=%d meter=%d",
-             elec != NULL, meter != NULL);
+    /* An OnOff switch endpoint and nothing else. 0.11.2 also declared the
+     * metering and electrical-measurement clusters here as CLIENT, on the
+     * theory that the stack refused to send configure_reporting on a cluster
+     * our own endpoint did not carry. That build was never flashed, and
+     * measurement has since been removed entirely -- so the endpoint is back
+     * to declaring only what this coordinator actually does. */
 
     ESP_ERROR_CHECK(ezb_af_device_add_endpoint_desc(dev, ep));
     ESP_ERROR_CHECK(ezb_af_device_desc_register(dev));
