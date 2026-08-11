@@ -1,57 +1,68 @@
-# panel_mp — the panel UI in MicroPython (rendering-stability test)
+# panel_mp — מוצר א׳: הפאנל
 
-זהו **פורט 1:1 של ה-UI שב-`panel/`** (C/ESP-IDF) ל-MicroPython + lvgl_micropython,
-נבנה למטרה אחת: **לבדוק אם ה-UI הרזה מרנדר יציב על החומרה ב-MicroPython**, אחרי
-שסאגת הדריפט הביאה למעבר ל-C. אותה ארכיטקטורה, אותה שיטת ניהול מסכים, אותו עיצוב —
-המשתנה היחיד הוא השפה/דרייבר.
+**זהו המוצר**, לא ניסוי. ה-CrowPanel Advance 7" מריץ כאן את ה-UI **ואת המוח**
+בתהליך MicroPython אחד, על **לולאת asyncio אחת**, עם ה-H2 מחובר ב-UART1.
 
-## מה זהה ל-C (בכוונה)
+> הקובץ הזה תיאר פעם ניסוי רינדור טהור ("אין מוח, אין UART, אין שעון אמיתי").
+> זה נכון עד 2026-07-29 בלבד. הניסוי הצליח, והתיקייה גדלה למוצר.
 
-| C (`panel/main/ui/`) | כאן | תפקיד |
+## מה רץ כאן
+
+| רכיב | קובץ | תפקיד |
 |---|---|---|
-| `theme.h` | `theme.py` | טוקנים (צבעי style.css), `card()`/`screen()`, טעינת פונטים |
-| `widgets.c` | `widgets.py` | `w_label`/`w_group`/`w_stripe`/`w_header`/`w_card_button` |
-| `shell.c` | `shell.py` | `page_create` (chrome: header דק + חזרה + שעון-פינה) + `placeholder` |
-| `page.c` | `pages.py` | registry ניטרלי-לפריסה (5 עמודים, hex accents) |
-| `clock.c` | `clock.py` | שעון mock (11:57, tick דקה, LTR enforced) |
-| `ui_home.c` | `ui_home.py` | ראש עשיר + hero+4 — הפריסה חיה רק פה |
-| `main.c` | `display.py` + `main.py` | bring-up חומרה + wiring |
+| bring-up חומרה | `display.py` | RGB 800×480, GT911 touch, I2C משותף (מפרסם `display.i2c` ל-RTC) |
+| pump של LVGL | `lvgl_loop.py` | `lv.tick_inc` + `lv.timer_handler` **על הלולאה** — לא `task_handler.TaskHandler` |
+| קומפוזיציה | `brain.py` | בונה את `Api` של `smart_kosher` in-process |
+| גשר UI→מוח | `bridge.py` | callback סינכרוני של LVGL → `await api.dispatch` |
+| מנוע תזמון | `smart_kosher/application/scheduler.py` | מה שהופך תזמון שמור לפקודה שנשלחת (+catch-up בבוט). **במוח, לא כאן** — `main.py` רק מפעיל אותו כמשימה |
+| שכבה ריאקטיבית | `reactive.py`, `store.py` | signals; מסך קורא מ-store דרך `bind`, לא polling |
+| נקודת כניסה | `main.py` | סדר בוט + כל המשימות על לולאה אחת |
+| בדיקות חומרה — רדיו | `hwtest.py`, `run_hwtest.py` | 26 קביעות מול H2 ומפסקים אמיתיים |
+| בדיקות חומרה — מסך | `hwtest_ui.py`, `run_hwtest_ui.py` | 33 קביעות: מסכים נבנים, נכנסים ל-800×480, לא דולפים |
+| בדיקות חומרה — זמנים | `hwtest_zmanim.py`, `run_hwtest_zmanim.py` | 540 ערכים מהמכשיר מול טבלת הייחוס (float חד-דיוק!) |
 
-הפונטים (`fonts/assistant_*.bin`) נטענים ב-runtime עם `lv.binfont_create` (כמו
-ב-hebrew_probe), לא מקומפלים פנימה.
+שאר הקבצים הם מסכים (`ui_home`, `rooms_page`, `room_page`, `device_page`,
+`zmanim_page`, `schedules_page`, `schedule_add`, `settime`) ורכיבים
+(`theme`, `widgets`, `shell`, `keyboard`, `toast`, `text_input`,
+`zone_picker`, `city_picker`).
 
-## מה **שונה** מ-C — וזה הלב של הבדיקה
+## שלושה כללים שאסור לשבור
 
-ל-C יש **bounce buffers** של `esp_lcd` (Track B) שפתרו את הדריפט. דרייבר ה-RGB של
-lvgl_micropython חושף רק את מסלול **שני ה-framebuffers המלאים ב-SPIRAM**
-(`RENDER_MODE.FULL`, swap בלי copy) — לא bounce. לכן הכפתור המרכזי לבדיקה הוא
-`display.PCLK_HZ` (ברירת מחדל 14MHz — "max safe" מיוני; 21MHz גלש).
+1. **בלי `gc.collect()` / `gc.threshold()` אחרי שהרינדור התחיל.** משחרר partial
+   buffer שה-copy task על core 0 עדיין מצביע אליו → `LoadProhibited` bootloop.
+   (זו בדיוק האסטרטגיה ה*נכונה* למוצר ב׳, שאין לו PSRAM. כאן היא אסורה.)
+2. **בלי scroll ובלי אנימציית מסך-מלא.** לפאנל אין GRAM; ה-DMA סורק את ה-FB
+   מחדש בכל פריים. המסקנה שקל לפספס: מה שלא נכנס ל-800×480 **מצויר מחוץ לדף
+   ונעלם בשקט** — אין סרגל גלילה שיגיע אליו ואין שגיאה. לכן לכל מסך עם פריסה
+   קבועה יש הערת תקציב גבהים בקוד, ו-`hwtest_ui.py` מודד את העץ הבנוי
+   בקואורדינטות מוחלטות. חישוב על הנייר כבר פספס פעם 8 פיקסלים.
+3. **כל `create_task` מ-callback של UI חייב keepalive.** ב-MicroPython task
+   שאף אחד לא מחזיק אליו הפניה נאסף לפני שהוא רץ — `bridge.py` מצמיד אותם
+   ב-`_pending`. בלי זה הפעולה פשוט לא קורית, בשקט.
+
+## למה MicroPython, אחרי שנטשנו לטובת C
+
+הדריפט **לא** נבע מהשפה. דרייבר ה-RGB של lvgl_micropython לא הגדיר
+`bounce_buffer_size_px`, אז ה-DMA סרק ישירות מ-PSRAM וכל latency spike הרעיב
+אותו. הפתרון כאן: **בלי** `frame_buffer1/2` ל-`RGBDisplay` ⇒ הדרייבר מקצה
+partial buffers ב-SRAM פנימי (`RENDER_MODE.PARTIAL`), שזה שקול-תפקודית
+ל-bounce buffers של `esp_lcd` בקושחת ה-C. `PCLK_HZ = 18MHz`.
+
+דורש firmware של lvgl_micropython עם `LV_USE_BIDI=1`, פונט עברי, ו-sdkconfig
+עם `DATA_CACHE_LINE_64B` + `SPIRAM_XIP_FROM_PSRAM`.
 
 ## צריבה
-
-דורש firmware של **lvgl_micropython עם `LV_USE_BIDI=1` + פונט DejaVu-Hebrew**
-(ראה `deploy/lvgl_micropy_S3_bidi_hebrew.bin` אם קיים, או ה-build מהזיכרון
-[[lvgl-crowpanel]]). ואז:
 
 ```powershell
 .\panel_mp\deploy.ps1 -Port COM8
 ```
 
-ה-script מנקה קודם את הלוח (מוחק main.py + reset) כי ה-DMA של LVGL רץ ברקע ומפיל
-`mpremote cp` באמצע — זו הדרך הבטוחה המתועדת.
+`deploy.ps1` קורא קודם ל-`clean_board.py`: לוח שכבר מרנדר ממשיך להריץ DMA ברקע
+גם ב-REPL, וכל העברת קובץ מתנגשת בו ומשחיתה את ה-VFS. `clean_board` עושה
+hardware-reset ומציף Ctrl-C בחלון הבוט כדי לעצור את `main.py` **לפני**
+`display.init()`. אף פעם לא `mpremote cp` נקודתי ללוח שמרנדר.
 
-## פרוטוקול הבדיקה (מה שמכריע היתכנות)
+## מה עוד לא
 
-1. לצרוב, ולהשאיר את מסך הבית **ב-idle 15-20 דקות**. בדיקה קצרה מטעה — "היציבות
-   מיוני הייתה אשליה" כי הבדיקות היו קצרות.
-2. לחפש: **סחיפה אופקית** מתמשכת, **גלגול** אנכי, קרעים, או **טשטוש קצה-שמאל**.
-3. ללחוץ על הכרטיסים (ניווט = החלפת מסך מיידית, בלי אנימציה) ולחזור — לוודא שאין
-   shear/flicker בהחלפה.
-4. אם נקי אחרי 20 דקות → הפורט בר-קיימא, וממשיכים לחבר את המוח (async על אותו
-   loop). אם גולש → לרדת ב-`PCLK_HZ` (12MHz) ולחזור; אם עדיין → הבעיה מתחת ל-LVGL
-   (bandwidth/timing), ו-MicroPython בלי bounce buffers כנראה לא יספיק.
-
-## מה זה עדיין **לא**
-
-טהור-UI. אין מוח, אין UART ל-H2, אין שעון אמיתי — בדיוק כמו שלב ה-C המקביל. אלה
-נכנסים רק **אחרי** שהרינדור מוכרע. תלוי בהצלחת הבדיקה הזו.
+קבוצות ו-recurrences מבוססות-תאריך (אין UI); מסך הגדרות/עיר; reconcile
+(עקיפה ידנית); ריבוי גנגים (ראה "Known gaps" ב-README הראשי).

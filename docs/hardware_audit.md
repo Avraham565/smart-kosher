@@ -1,10 +1,18 @@
 # Hardware Reality Audit
 
-Date: 2026-06-27
+Date: 2026-06-27. Reviewed 2026-08-05.
 
 This project was originally built before the hardware was available. From this
 point on, hardware-facing code should be promoted from `experiments/` only after
 it has been tested on real devices.
+
+> **How to read this file.** It is a dated audit log, not a description of the
+> present. Sections are appended, not rewritten, so an early section can be
+> superseded by a later one — the `## Deleted` list below is the clearest case:
+> the files it names were deleted in June 2026 and then *rebuilt* from the
+> hardware-proven protocol in July, which `## Production Gateway (2026-07-09)`
+> records. Each superseded section is now marked. For the current protocol read
+> `docs/UART_PROTOCOL.md`; for the current firmware plan, `docs/h2_production_plan.md`.
 
 ## Hardware-Proven Source
 
@@ -93,6 +101,7 @@ untested Zigbee assumptions:
 - `src/smart_kosher/application/planner.py`
 - `src/smart_kosher/application/executor.py`
 - `src/smart_kosher/application/recovery.py`
+- `src/smart_kosher/application/migrations.py`
 - `src/smart_kosher/application/crud_service.py`
 - `src/smart_kosher/application/control_service.py`
 - `src/smart_kosher/ports/repository.py`
@@ -104,6 +113,10 @@ untested Zigbee assumptions:
 - `src/smart_kosher/web/` for local product UI and API iteration
 - `dev_server.py` for local development
 - `tests/test_zmanim.py`
+- `tests/test_zmanim_reference.py`
+- `tests/test_cities.py`
+- `tests/test_migrations.py`
+- `tests/test_zman_keys_are_in_sync.py`
 - `tests/test_domain.py`
 - `tests/test_planner.py`
 - `tests/test_application.py`
@@ -112,7 +125,13 @@ untested Zigbee assumptions:
 - `tests/test_routes.py`
 - `tests/test_uart_codec.py`
 
-## Deleted
+## Deleted (2026-06-27) — ⚠️ SUPERSEDED, both files exist again
+
+> **Do not read this as current.** Both files below were deleted in June 2026
+> and then written again from scratch in July against the protocol the hardware
+> actually speaks. They exist today and are the production path — see
+> `## Production Gateway (2026-07-09)` above. What stayed dead is the
+> `zcl_command` design, not the filenames.
 
 These files described a production Zigbee gateway that was not validated by the
 current hardware experiment and did not match the H2 coordinator protocol:
@@ -124,18 +143,27 @@ Reason: they used a planned `zcl_command` protocol with IEEE address and Zigbee
 endpoint routing. The H2 firmware that actually ran on hardware currently
 accepts `ping`, `permit_join`, `on_off`, and `read_attr`.
 
-## Rewrite From Experiments
+## Rewrite From Experiments — ✅ done, except where noted
 
 These product concepts are valid, but their hardware-facing implementation must
 come from the experiment, not the deleted blind adapter:
 
-- A Python/MicroPython S3 gateway adapter.
-- Device discovery and registration from H2 `device_joined` events.
-- Device selection by explicit `short_addr` at first, then by stable IDs after
-  the hardware proves what addresses survive reboot.
-- Multi-device support.
-- H2-side idempotency using product `event_id`.
-- A saved app-level device list for reset/reboot recovery.
+- ✅ A Python/MicroPython S3 gateway adapter. — `adapters/zigbee_gateway.py`.
+- ✅ Device discovery and registration from H2 `device_joined` events.
+- ✅ Device selection by `short_addr`, keyed on the stable `ieee_addr`: the
+  registry is healed from every `device_joined`, because short_addr changes on
+  rejoin.
+- ✅ Multi-device support. Multi-*gang* (several endpoints on one radio) is
+  **not** done: the coordinator discovers and reports the endpoint list, and
+  commands honour a per-entity `zigbee_endpoint`, but the hub's live state is
+  still keyed by ieee alone, so two gangs of one switch share one state.
+- ❌ H2-side idempotency using product `event_id`. Not implemented, and no
+  longer the plan: the H2 is deliberately stateless, and delivery proof now
+  comes from the APS confirm (`delivered`), so the hub journals only what
+  actually arrived. The residual risk is power loss between the relay acting
+  and the hub journalling.
+- ✅ A saved app-level device list for reset/reboot recovery. —
+  `/data/zigbee_devices.json`.
 
 ## Review Later
 
@@ -149,7 +177,11 @@ moves from experiments into the product:
   if Markdown extracts are enough, remove PDFs in a separate repository hygiene
   pass.
 
-## Next Hardware Step
+## Next Hardware Step — ⚠️ SUPERSEDED (this describes firmware v0.5.0)
+
+> Steps 1–4 below are all done. The coordinator is now at 0.11.x and the
+> production plan lives in `docs/h2_production_plan.md`; its open items are the
+> current list, not this one.
 
 Architecture refactor done (v0.5.0):
 - H2 is fully stateless — `s_devices[]` table removed entirely.

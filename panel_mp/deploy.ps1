@@ -37,11 +37,13 @@ Get-ChildItem (Join-Path $here "fonts\*.bin") | ForEach-Object {
 Write-Host "== 3) copy UI modules to board root =="
 $modules = "theme.py", "widgets.py", "reactive.py", "store.py", "hebdate.py",
            "clock.py", "shell.py", "pages.py", "keyboard.py", "text_input.py",
-           "settime.py", "zmanim_page.py", "toast.py", "dev_common.py",
+           "settime.py", "city_picker.py", "zmanim_page.py", "toast.py", "dev_common.py",
            "zone_picker.py", "rooms_page.py", "room_page.py", "device_page.py",
            "sched_labels.py", "sched_describe.py", "schedules_page.py",
            "schedule_add.py", "display.py", "ui_home.py", "lvgl_loop.py",
-           "bridge.py", "brain.py", "scheduler.py"
+           "bridge.py", "brain.py"
+# scheduler.py is NOT here any more: it moved into the brain package
+# (smart_kosher/application/scheduler.py) and ships with the /lib copy below.
 foreach ($m in $modules) {
     Write-Host "   module ->" $m
     Mpr cp (Join-Path $here $m) (":" + $m)
@@ -65,6 +67,18 @@ try {
     Mpr cp -r (Join-Path $stage "smart_kosher") ":/lib/"
 } finally {
     Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+}
+
+Write-Host "== 3c) remove modules that moved out of the board root =="
+# A board flashed before 2026-08-05 has /scheduler.py at the root. It now lives
+# in the brain package (/lib/smart_kosher/application/) and main.py imports it
+# from there, so the root copy is dead -- but nothing deletes it: clean_board
+# only removes main.py, and a copy never removes what it does not overwrite. A
+# stale module that still imports and still runs is exactly what wastes an hour
+# at 3am.
+foreach ($stale in @("scheduler.py")) {
+    try { Mpr rm (":" + $stale); Write-Host "   removed stale ->" $stale }
+    catch { }   # not there: the normal case on a clean board
 }
 
 Write-Host "== 4) main.py last, then reset =="

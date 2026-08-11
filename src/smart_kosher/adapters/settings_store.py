@@ -57,18 +57,32 @@ def _sync_filesystem():
 class SettingsStore:
     def __init__(self, path, defaults=None):
         self._path = path
-        self._data = dict(defaults or {})
         self.load_error = None
-        self._data.update(self._load())
+        self._stored = self._load()
+        self._data = dict(defaults or {})
+        self._data.update(self._stored)
 
     def get(self):
+        """Effective settings: what is stored, over the defaults."""
         return dict(self._data)
+
+    def stored(self):
+        """Only what the file actually holds, with no defaults filled in.
+
+        A migration needs this. ``get()`` cannot answer "was this ever set?" --
+        a default is indistinguishable from a stored value there, so a device
+        missing ``elevation`` reads back the default one and a backfill that
+        checked ``get()`` would decide there was nothing to do.
+        """
+        return dict(self._stored)
 
     def update(self, patch):
         merged = dict(self._data)
         merged.update(patch)
         self._save(merged)
         self._data = merged
+        # _save writes the merged view, so everything in it is now on disk.
+        self._stored = dict(merged)
 
     def _read(self, path):
         with open(path) as handle:

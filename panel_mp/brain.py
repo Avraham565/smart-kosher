@@ -31,22 +31,19 @@ from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.device_time import DeviceTimeService
 from smart_kosher.application.executor import Executor
-from smart_kosher.application.views import ViewService
+from smart_kosher.application.migrations import apply_all as apply_migrations
+from smart_kosher.application.migrations import describe as describe_migrations
+from smart_kosher.application.views import SETTINGS_DEFAULTS, ViewService
 
 DATA_DIR = "/data"
 
 # Jerusalem pilot defaults; persisted to /data/settings.json on first change.
-# candle_offset is a fixed product rule (candle-lighting / Shabbat entry = 20 min
-# before sunset), not a per-community knob -- there is no UI to change it.
-_SETTINGS_DEFAULTS = {
-    "city": "ירושלים",
-    "lat": 31.7683,
-    "lon": 35.2137,
-    "utc_offset_minutes": 120,
-    "candle_offset": 20,
-    "tzais_offset": 40,
-    "in_israel": True,
-}
+# Taken from the shared SETTINGS_DEFAULTS rather than copied: this file used to
+# hold its own literals, and its candle_offset (20) had silently diverged from
+# product B's and the view layer's (18) -- two Shabbat-entry times for one
+# schedule. Only ``city`` is added here, because only the panel names one.
+_SETTINGS_DEFAULTS = dict(SETTINGS_DEFAULTS)
+_SETTINGS_DEFAULTS["city"] = "ירושלים"
 
 # The journal keeps records as Python objects in RAM. Even with PSRAM there is
 # no reason to grow it unbounded; a couple of pilot days fit in a small bound.
@@ -113,6 +110,15 @@ def create(data_dir=DATA_DIR, repository=None, gateway=None, defaults=None,
         data_dir + "/settings.json",
         defaults=_SETTINGS_DEFAULTS if defaults is None else defaults,
     )
+
+    # Before anything reads a schedule or computes a zman: drops schedules
+    # naming a zman the product retired (which would otherwise fail validation
+    # on every tick forever, without the user ever being told the switch
+    # stopped firing), and pins an explicit elevation on a settings file
+    # written before that field existed.
+    for line in describe_migrations(apply_migrations(repository, settings)):
+        print(line)
+
     views = ViewService(repository)
 
     # A settable clock only when the platform has one; DeviceTimeService(None)

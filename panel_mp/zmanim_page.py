@@ -3,8 +3,12 @@
 # binds to store.today (which the clock ticker already fills from today.get), so
 # the page needs no dispatch of its own and refreshes itself at date rollover.
 #
-# 19 zmanim in two RTL columns (morning on the right), static -- no scroll (the
+# 18 zmanim in two RTL columns (morning on the right), static -- no scroll (the
 # RGB panel bans it). Times are already local "HH:MM" from the brain.
+#
+# "צאת הכוכבים" and "צאת שבת" show the same time on purpose: both are 8.5 below
+# the horizon. They stay two rows because Shabbat exit is the concept schedules
+# point at, so a stricter shiur later moves only that one.
 
 import lvgl as lv
 
@@ -35,7 +39,6 @@ _EVENING = (
     ("shkia", "שקיעה"),
     ("tset_hakohavim", "צאת הכוכבים"),
     ("tset_hakohavim_shabbat", "צאת שבת"),
-    ("tset_hakohavim_tsom", "צאת תענית"),
     ("tset_hakohavim_rabeinu_tam", "רבינו תם"),
     ("chatzot_halayla", "חצות הלילה"),
 )

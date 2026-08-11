@@ -9,6 +9,7 @@ storage.
 import time
 
 from ..zmanim import (
+    CANDLE_OFFSET_MINUTES,
     add_gregorian_days,
     compute_zmanim,
     date_info,
@@ -17,19 +18,34 @@ from ..zmanim import (
 )
 from .planner import Planner, PlannerConfig
 
-_SETTINGS_DEFAULTS = {
+# The fallback used whenever a settings key is missing, and the base every
+# composition root builds its own defaults from (each only adds ``city``).
+# Public on purpose: product A, product B and the dev server each used to keep
+# a private copy of this dict, and they had drifted apart on candle_offset.
+#
+# ``elevation`` sits here beside lat/lon because the three together are the
+# geography a zman is computed from, and the client lets a user type coordinates
+# by hand rather than only picking a packaged city. Deriving it from ``city``
+# instead would leave every hand-entered location at sea level -- which is the
+# bug this replaces: cities.json carried elevations that no caller ever passed,
+# so Jerusalem's sunset was computed almost five minutes early for years.
+#
+# candle_offset is deliberately absent. It is a fixed product rule
+# (zmanim.CANDLE_OFFSET_MINUTES), not a setting, and leaving it here would let a
+# settings.json written before that decision keep overriding it forever -- a
+# stored value always beats a default.
+SETTINGS_DEFAULTS = {
     "lat": 31.7683,
     "lon": 35.2137,
+    "elevation": 779,
     "utc_offset_minutes": 120,
-    "candle_offset": 18,
-    "tzais_offset": 40,
     "in_israel": True,
 }
 
 
 def _setting(settings, key):
     value = settings.get(key)
-    return _SETTINGS_DEFAULTS[key] if value is None else value
+    return SETTINGS_DEFAULTS[key] if value is None else value
 
 
 def offset_resolver(settings):
@@ -62,11 +78,13 @@ def offset_for_date(settings, year, month, day):
 
 
 def planner_config(settings):
+    # The two Shabbat offsets come from the constants, never from settings: a
+    # stale stored value must not be able to move Shabbat.
     return PlannerConfig(
         lat=_setting(settings, "lat"),
         lon=_setting(settings, "lon"),
-        candle_offset=int(_setting(settings, "candle_offset")),
-        tzais_offset=int(_setting(settings, "tzais_offset")),
+        altitude=_setting(settings, "elevation"),
+        candle_offset=CANDLE_OFFSET_MINUTES,
         in_israel=bool(_setting(settings, "in_israel")),
         utc_offset_minutes=int(_setting(settings, "utc_offset_minutes")),
         utc_offset_for_local=offset_resolver(settings),
@@ -96,9 +114,8 @@ def _build_today_view(settings, year, month, day):
     zmanim = compute_zmanim(
         year, month, day,
         _setting(settings, "lat"), _setting(settings, "lon"),
-        0,
-        int(_setting(settings, "candle_offset")),
-        int(_setting(settings, "tzais_offset")),
+        _setting(settings, "elevation"),
+        CANDLE_OFFSET_MINUTES,
     )
     info = date_info(year, month, day, in_israel)
 

@@ -3,120 +3,240 @@
     "name_he": "\u05d9\u05e8\u05d5\u05e9\u05dc\u05d9\u05dd",
     "lat": 31.7683,
     "lon": 35.2137,
-    "elevation": 754,
-    "candle_offset": 40,
-    "tzais_offset": 40
+    "elevation": 779
+  },
+  "beit_shemesh": {
+    "name_he": "\u05d1\u05d9\u05ea \u05e9\u05de\u05e9",
+    "lat": 31.7457,
+    "lon": 34.9887,
+    "elevation": 255
+  },
+  "modiin_illit": {
+    "name_he": "\u05de\u05d5\u05d3\u05d9\u05e2\u05d9\u05df \u05e2\u05d9\u05dc\u05d9\u05ea",
+    "lat": 31.932,
+    "lon": 35.0424,
+    "elevation": 321
+  },
+  "beitar_illit": {
+    "name_he": "\u05d1\u05d9\u05ea\u05e8 \u05e2\u05d9\u05dc\u05d9\u05ea",
+    "lat": 31.6961,
+    "lon": 35.1156,
+    "elevation": 685
+  },
+  "maale_adumim": {
+    "name_he": "\u05de\u05e2\u05dc\u05d4 \u05d0\u05d3\u05d5\u05de\u05d9\u05dd",
+    "lat": 31.7726,
+    "lon": 35.2977,
+    "elevation": 502
   },
   "tel_aviv": {
     "name_he": "\u05ea\u05dc \u05d0\u05d1\u05d9\u05d1",
     "lat": 32.0853,
     "lon": 34.7818,
-    "elevation": 0,
-    "candle_offset": 18,
-    "tzais_offset": 42
+    "elevation": 20
   },
   "bnei_brak": {
     "name_he": "\u05d1\u05e0\u05d9 \u05d1\u05e8\u05e7",
     "lat": 32.0833,
     "lon": 34.8333,
-    "elevation": 0,
-    "candle_offset": 20,
-    "tzais_offset": 42
+    "elevation": 51
   },
-  "haifa": {
-    "name_he": "\u05d7\u05d9\u05e4\u05d4",
-    "lat": 32.8191,
-    "lon": 34.9983,
-    "elevation": 0,
-    "candle_offset": 18,
-    "tzais_offset": 42
-  },
-  "beersheba": {
-    "name_he": "\u05d1\u05d0\u05e8 \u05e9\u05d1\u05e2",
-    "lat": 31.2530,
-    "lon": 34.7915,
-    "elevation": 280,
-    "candle_offset": 18,
-    "tzais_offset": 42
-  },
-  "eilat": {
-    "name_he": "\u05d0\u05d9\u05dc\u05ea",
-    "lat": 29.5577,
-    "lon": 34.9519,
-    "elevation": 0,
-    "candle_offset": 18,
-    "tzais_offset": 42
-  },
-  "zfat": {
-    "name_he": "\u05e6\u05e4\u05ea",
-    "lat": 32.9646,
-    "lon": 35.4960,
-    "elevation": 900,
-    "candle_offset": 18,
-    "tzais_offset": 42
-  },
-  "tiberias": {
-    "name_he": "\u05d8\u05d1\u05e8\u05d9\u05d4",
-    "lat": 32.7940,
-    "lon": 35.5300,
-    "elevation": 0,
-    "candle_offset": 18,
-    "tzais_offset": 42
-  },
-  "netanya": {
-    "name_he": "\u05e0\u05ea\u05e0\u05d9\u05d4",
-    "lat": 32.3215,
-    "lon": 34.8532,
-    "elevation": 0,
-    "candle_offset": 18,
-    "tzais_offset": 42
-  },
-  "ashdod": {
-    "name_he": "\u05d0\u05e9\u05d3\u05d5\u05d3",
-    "lat": 31.8010,
-    "lon": 34.6430,
-    "elevation": 0,
-    "candle_offset": 18,
-    "tzais_offset": 42
-  },
-  "rehovot": {
-    "name_he": "\u05e8\u05d7\u05d5\u05d1\u05d5\u05ea",
-    "lat": 31.8928,
-    "lon": 34.8113,
-    "elevation": 0,
-    "candle_offset": 18,
-    "tzais_offset": 42
+  "ramat_gan": {
+    "name_he": "\u05e8\u05de\u05ea \u05d2\u05df",
+    "lat": 32.0684,
+    "lon": 34.8248,
+    "elevation": 67
   },
   "petah_tikva": {
     "name_he": "\u05e4\u05ea\u05d7 \u05ea\u05e7\u05d5\u05d5\u05d4",
     "lat": 32.0869,
     "lon": 34.8878,
-    "elevation": 0,
-    "candle_offset": 18,
-    "tzais_offset": 42
+    "elevation": 53
+  },
+  "rishon_lezion": {
+    "name_he": "\u05e8\u05d0\u05e9\u05d5\u05df \u05dc\u05e6\u05d9\u05d5\u05df",
+    "lat": 31.973,
+    "lon": 34.7925,
+    "elevation": 41
+  },
+  "holon": {
+    "name_he": "\u05d7\u05d5\u05dc\u05d5\u05df",
+    "lat": 32.0117,
+    "lon": 34.7725,
+    "elevation": 33
+  },
+  "herzliya": {
+    "name_he": "\u05d4\u05e8\u05e6\u05dc\u05d9\u05d4",
+    "lat": 32.1624,
+    "lon": 34.8443,
+    "elevation": 66
+  },
+  "kfar_saba": {
+    "name_he": "\u05db\u05e4\u05e8 \u05e1\u05d1\u05d0",
+    "lat": 32.175,
+    "lon": 34.907,
+    "elevation": 55
+  },
+  "elad": {
+    "name_he": "\u05d0\u05dc\u05e2\u05d3",
+    "lat": 32.0525,
+    "lon": 34.9511,
+    "elevation": 107
+  },
+  "rosh_haayin": {
+    "name_he": "\u05e8\u05d0\u05e9 \u05d4\u05e2\u05d9\u05df",
+    "lat": 32.0956,
+    "lon": 34.9568,
+    "elevation": 64
+  },
+  "rehovot": {
+    "name_he": "\u05e8\u05d7\u05d5\u05d1\u05d5\u05ea",
+    "lat": 31.8928,
+    "lon": 34.8113,
+    "elevation": 56
+  },
+  "lod": {
+    "name_he": "\u05dc\u05d5\u05d3",
+    "lat": 31.9515,
+    "lon": 34.8953,
+    "elevation": 72
+  },
+  "ramla": {
+    "name_he": "\u05e8\u05de\u05dc\u05d4",
+    "lat": 31.9288,
+    "lon": 34.8667,
+    "elevation": 83
   },
   "modiin": {
     "name_he": "\u05de\u05d5\u05d3\u05d9\u05e2\u05d9\u05df",
     "lat": 31.8969,
     "lon": 35.0095,
-    "elevation": 270,
-    "candle_offset": 18,
-    "tzais_offset": 42
+    "elevation": 249
+  },
+  "ashdod": {
+    "name_he": "\u05d0\u05e9\u05d3\u05d5\u05d3",
+    "lat": 31.801,
+    "lon": 34.643,
+    "elevation": 40
+  },
+  "ashkelon": {
+    "name_he": "\u05d0\u05e9\u05e7\u05dc\u05d5\u05df",
+    "lat": 31.6688,
+    "lon": 34.5715,
+    "elevation": 44
+  },
+  "netanya": {
+    "name_he": "\u05e0\u05ea\u05e0\u05d9\u05d4",
+    "lat": 32.3215,
+    "lon": 34.8532,
+    "elevation": 31
+  },
+  "hadera": {
+    "name_he": "\u05d7\u05d3\u05e8\u05d4",
+    "lat": 32.434,
+    "lon": 34.9196,
+    "elevation": 44
+  },
+  "kiryat_gat": {
+    "name_he": "\u05e7\u05e8\u05d9\u05ea \u05d2\u05ea",
+    "lat": 31.61,
+    "lon": 34.7642,
+    "elevation": 133
+  },
+  "sderot": {
+    "name_he": "\u05e9\u05d3\u05e8\u05d5\u05ea",
+    "lat": 31.525,
+    "lon": 34.596,
+    "elevation": 88
+  },
+  "beersheba": {
+    "name_he": "\u05d1\u05d0\u05e8 \u05e9\u05d1\u05e2",
+    "lat": 31.253,
+    "lon": 34.7915,
+    "elevation": 289
+  },
+  "dimona": {
+    "name_he": "\u05d3\u05d9\u05de\u05d5\u05e0\u05d4",
+    "lat": 31.07,
+    "lon": 35.0333,
+    "elevation": 548
+  },
+  "arad": {
+    "name_he": "\u05e2\u05e8\u05d3",
+    "lat": 31.259,
+    "lon": 35.214,
+    "elevation": 610
+  },
+  "mitzpe_ramon": {
+    "name_he": "\u05de\u05e6\u05e4\u05d4 \u05e8\u05de\u05d5\u05df",
+    "lat": 30.61,
+    "lon": 34.8016,
+    "elevation": 850
+  },
+  "eilat": {
+    "name_he": "\u05d0\u05d9\u05dc\u05ea",
+    "lat": 29.5577,
+    "lon": 34.9519,
+    "elevation": 43
+  },
+  "haifa": {
+    "name_he": "\u05d7\u05d9\u05e4\u05d4",
+    "lat": 32.8191,
+    "lon": 34.9983,
+    "elevation": 14
+  },
+  "akko": {
+    "name_he": "\u05e2\u05db\u05d5",
+    "lat": 32.9281,
+    "lon": 35.0818,
+    "elevation": 7
+  },
+  "nahariya": {
+    "name_he": "\u05e0\u05d4\u05e8\u05d9\u05d4",
+    "lat": 33.0078,
+    "lon": 35.095,
+    "elevation": 10
+  },
+  "karmiel": {
+    "name_he": "\u05db\u05e8\u05de\u05d9\u05d0\u05dc",
+    "lat": 32.9158,
+    "lon": 35.2947,
+    "elevation": 310
+  },
+  "zfat": {
+    "name_he": "\u05e6\u05e4\u05ea",
+    "lat": 32.9646,
+    "lon": 35.496,
+    "elevation": 780
+  },
+  "tiberias": {
+    "name_he": "\u05d8\u05d1\u05e8\u05d9\u05d4",
+    "lat": 32.794,
+    "lon": 35.53,
+    "elevation": 0
+  },
+  "nof_hagalil": {
+    "name_he": "\u05e0\u05d5\u05e3 \u05d4\u05d2\u05dc\u05d9\u05dc",
+    "lat": 32.71,
+    "lon": 35.317,
+    "elevation": 431
+  },
+  "afula": {
+    "name_he": "\u05e2\u05e4\u05d5\u05dc\u05d4",
+    "lat": 32.6078,
+    "lon": 35.2897,
+    "elevation": 63
+  },
+  "beit_shean": {
+    "name_he": "\u05d1\u05d9\u05ea \u05e9\u05d0\u05df",
+    "lat": 32.4968,
+    "lon": 35.4997,
+    "elevation": 0
   },
   "ariel": {
     "name_he": "\u05d0\u05e8\u05d9\u05d0\u05dc",
     "lat": 32.1061,
     "lon": 35.1676,
-    "elevation": 652,
-    "candle_offset": 18,
-    "tzais_offset": 42
-  },
-  "mitzpe_ramon": {
-    "name_he": "\u05de\u05e6\u05e4\u05d4 \u05e8\u05de\u05d5\u05df",
-    "lat": 30.6100,
-    "lon": 34.8016,
-    "elevation": 875,
-    "candle_offset": 18,
-    "tzais_offset": 42
+    "elevation": 521
   }
 }

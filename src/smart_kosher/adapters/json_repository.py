@@ -10,6 +10,7 @@ import os
 from ..domain._values import clone_json, is_integer
 from ..domain.entities import ALL_ENTITY_TYPES, validate_entity
 from ..domain.events import validate_event
+from ..domain.schedules import retired_zman_key
 from ..ports.journal import EventJournal
 from ..ports.repository import Repository
 
@@ -71,6 +72,10 @@ class JsonRepository(Repository):
         self.base_path = base_path.rstrip("/\\") or base_path
         self._data = {entity_type: [] for entity_type in ALL_ENTITY_TYPES}
         self._revisions = {entity_type: 0 for entity_type in ALL_ENTITY_TYPES}
+        # Records dropped while loading because they name a retired zman. Read
+        # by application.migrations, which persists the cleaned collection and
+        # reports what went. Never silently discarded.
+        self.dropped_records = []
         self._ensure_base_path()
         if load:
             self.load_all()
@@ -110,9 +115,36 @@ class JsonRepository(Repository):
                 )
             seen.add(entity["id"])
 
+    def _drop_retired(self, entity_type, data):
+        """Separate records naming a retired zman from the rest.
+
+        These are not corruption and must not reach _validate_collection: a
+        schedule written before a zman was retired is well-formed data that the
+        current rules no longer accept. Failing it there would send a healthy
+        file down the .tmp/.bak recovery path, where the backup holds the very
+        same record -- and the device would refuse to start over one stale
+        switch. They are dropped here and reported by application.migrations.
+        """
+        if entity_type != "schedules" or not isinstance(data, list):
+            return data
+        kept = []
+        # Recorded by id: load_all may read the same collection up to three
+        # times (primary, then .tmp, then .bak) when the primary is unreadable,
+        # and each pass would otherwise report the same stale schedule again.
+        seen = {record.get("id") for record in self.dropped_records
+                if isinstance(record, dict)}
+        for record in data:
+            if retired_zman_key(record) is None:
+                kept.append(record)
+            elif record.get("id") not in seen:
+                self.dropped_records.append(record)
+                seen.add(record.get("id"))
+        return kept
+
     def _read_collection(self, entity_type, path):
         with open(path) as handle:
             data = json.load(handle)
+        data = self._drop_retired(entity_type, data)
         self._validate_collection(entity_type, data)
         return data
 

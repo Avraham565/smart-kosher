@@ -4,6 +4,7 @@ from ..domain._values import is_integer
 from ..domain.events import Event
 from ..domain.schedules import validate_schedule
 from ..zmanim import (
+    CANDLE_OFFSET_MINUTES,
     add_gregorian_days,
     compute_zmanim,
     date_info,
@@ -17,8 +18,7 @@ class PlannerConfig:
         lat,
         lon,
         altitude=0,
-        candle_offset=18,
-        tzais_offset=40,
+        candle_offset=CANDLE_OFFSET_MINUTES,
         in_israel=True,
         utc_offset_minutes=120,
         utc_offset_for_local=None,
@@ -27,14 +27,13 @@ class PlannerConfig:
         self.lon = lon
         self.altitude = altitude
         self.candle_offset = candle_offset
-        self.tzais_offset = tzais_offset
         self.in_israel = in_israel
         if not is_integer(utc_offset_minutes):
             raise ValueError("utc_offset_minutes must be an integer")
         self.utc_offset_minutes = utc_offset_minutes
         self.utc_offset_for_local = utc_offset_for_local
 
-        compute_zmanim(2026, 1, 1, lat, lon, altitude, candle_offset, tzais_offset)
+        compute_zmanim(2026, 1, 1, lat, lon, altitude, candle_offset)
         self.offset_for_local(2026, 1, 1, 0, 0)
 
     def offset_for_local(self, year, month, day, hour, minute):
@@ -63,7 +62,7 @@ class Planner:
                 compute_zmanim(
                     year, month, day,
                     self.cfg.lat, self.cfg.lon,
-                    self.cfg.altitude, self.cfg.candle_offset, self.cfg.tzais_offset,
+                    self.cfg.altitude, self.cfg.candle_offset,
                 ),
                 date_info(year, month, day, self.cfg.in_israel),
             )

@@ -60,7 +60,7 @@ class PlannerTests(unittest.TestCase):
         self.config = PlannerConfig(
             31.7683,
             35.2137,
-            altitude=754,
+            altitude=779,
             candle_offset=40,
             utc_offset_for_local=israel_utc_offset_for_local,
         )
@@ -88,7 +88,9 @@ class PlannerTests(unittest.TestCase):
             recurrence_type="erev_assur_bemelacha",
         )
         planner = Planner(self.config, MemoryStorage([friday]))
-        raw = compute_zmanim(2026, 6, 5, 31.7683, 35.2137, 754, 40)["shkia"] + 600
+        # Must mirror self.config exactly -- this recomputes what the planner
+        # is expected to have used.
+        raw = compute_zmanim(2026, 6, 5, 31.7683, 35.2137, 779, 40)["shkia"] + 600
         utc_minute = int(raw // 1)
         event_date = add_gregorian_days(2026, 6, 5, utc_minute // 1440)
         minute_of_day = utc_minute % 1440

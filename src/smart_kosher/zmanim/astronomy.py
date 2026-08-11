@@ -71,6 +71,19 @@ def _jc(jd):
 def _jd_from_jc(jc):
     return jc * _DAYS_PER_CENTURY + _J2000
 
+def _jc_plus_days(jc, days):
+    """Advance Julian centuries by a day offset, without rebuilding the Julian day.
+
+    Algebraically just ``_jc(_jd_from_jc(jc) + days)``, but not numerically. The
+    panel runs a single-precision MicroPython build, where floats near a Julian
+    day's 2.46e6 are spaced 0.25 apart -- so ``jd + minutes / 1440`` rounds the
+    offset away entirely and the refinement passes below silently do nothing.
+    Julian centuries are order 0.26, where the same offset is representable, so
+    adding it there keeps it. On CPython's doubles the two forms agree to the
+    last bit; this only ever mattered on the device.
+    """
+    return jc + days / _DAYS_PER_CENTURY
+
 def _mean_longitude(jc):
     return (280.46646 + jc * (36000.76983 + jc * 0.0003032)) % 360.0
 
@@ -126,15 +139,13 @@ def _equation_of_time(jc):
 
 def _solar_noon_utc_minutes(jc, lon_west):
     """חצות שמש בדקות UTC. lon_west: קו אורך מערבי-חיובי."""
-    jd_start = _jd_from_jc(jc)
-
     # pass 1
-    approx_jc  = _jc(jd_start + lon_west / 360.0)
+    approx_jc  = _jc_plus_days(jc, lon_west / 360.0)
     approx_eot = _equation_of_time(approx_jc)
     approx_noon = 720.0 + lon_west * 4.0 - approx_eot
 
     # pass 2
-    refined_jc  = _jc(jd_start - 0.5 + approx_noon / 1440.0)
+    refined_jc  = _jc_plus_days(jc, -0.5 + approx_noon / 1440.0)
     refined_eot = _equation_of_time(refined_jc)
     return 720.0 + lon_west * 4.0 - refined_eot
 
@@ -168,11 +179,11 @@ def _utc_sun_minutes(jd, lat, lon_west, zenith, is_sunrise):
 
     # pass 1: מתחיל מחצות שמש
     noon_min = _solar_noon_utc_minutes(jc, lon_west)
-    jc1      = _jc(jd + noon_min / 1440.0)
+    jc1      = _jc_plus_days(jc, noon_min / 1440.0)
     first    = _approx_utc_minutes(jc1, lat, lon_west, zenith, is_sunrise)
 
     # pass 2: מחדד את התוצאה
-    jc2      = _jc(jd + first / 1440.0)
+    jc2      = _jc_plus_days(jc, first / 1440.0)
     return _approx_utc_minutes(jc2, lat, lon_west, zenith, is_sunrise)
 
 # ---------------------------------------------------------------------------

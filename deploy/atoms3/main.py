@@ -1,5 +1,24 @@
 """AtomS3 Lite entry point — Smart Kosher headless hub (product B).
 
+STATUS: PAUSED (2026-08-05). The code is kept and still builds, but product A
+(panel_mp/) is where the work is. Two things here are known to lag behind it:
+
+  * NO SCHEDULER. This file composes the Executor and the Api but never starts
+    a scheduler tick, so a schedule saved on this hub is stored and then never
+    fires. The engine is already here and importable —
+    smart_kosher.application.scheduler — so wiring it up is one task on the
+    loop below, with the same executor these services share:
+
+        sched = Scheduler(repo, settings, executor)
+        asyncio.create_task(sched.run())   # keep the handle: see the F841 note
+
+    Left undone deliberately: product B has no hardware attached to verify it
+    on right now, and an unverified scheduler is worse than an absent one.
+    Until then, treat this hub as manual control plus an API, not automation.
+  * The panel's own gateway fixes (delivery-proof ack mapping, reporting retry,
+    device_left) are shared, since both import the same adapters — but nothing
+    here has been re-verified on the NanoC6 since those landed.
+
 Deployed to the device root as /main.py (see deploy.ps1). Runs under
 MicroPython v1.24.1.
 
@@ -31,7 +50,9 @@ from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.device_time import DeviceTimeService
 from smart_kosher.application.executor import Executor
-from smart_kosher.application.views import ViewService
+from smart_kosher.application.migrations import apply_all as apply_migrations
+from smart_kosher.application.migrations import describe as describe_migrations
+from smart_kosher.application.views import SETTINGS_DEFAULTS, ViewService
 from smart_kosher.web.server import create_app
 
 DATA_DIR = "/data"
@@ -144,18 +165,15 @@ def main():
     executor = Executor(gateway, journal)
     crud     = CrudService(repo)
     control  = ControlService(executor, repo)
-    settings = SettingsStore(
-        DATA_DIR + "/settings.json",
-        defaults={
-            "city": "ירושלים",
-            "lat": 31.7683,
-            "lon": 35.2137,
-            "utc_offset_minutes": 120,
-            "candle_offset": 18,
-            "tzais_offset": 40,
-            "in_israel": True,
-        },
-    )
+    # From the shared defaults, not a private copy: this dict used to carry its
+    # own candle_offset (18) while product A's carried 20, so one schedule had
+    # two Shabbat-entry times depending on which box ran it.
+    defaults = dict(SETTINGS_DEFAULTS)
+    defaults["city"] = "ירושלים"
+    settings = SettingsStore(DATA_DIR + "/settings.json", defaults=defaults)
+
+    for line in describe_migrations(apply_migrations(repo, settings)):
+        print(line)
 
     ip = connect_wifi()
 

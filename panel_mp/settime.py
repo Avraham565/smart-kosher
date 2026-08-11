@@ -3,6 +3,12 @@
 # numeric keyboard (keyboard.py), then confirm: the entered LOCAL time is
 # converted to UTC and written to the RTC via the in-process brain (time.set).
 #
+# The city lives here too, because it is the other half of the same answer: a
+# clock without a location cannot produce a zman. Tapping it opens city_picker
+# (search + Hebrew keyboard) and the chosen id goes to settings.update, which
+# applies that city's latitude, longitude AND elevation together -- the panel
+# never sends coordinates of its own.
+#
 # Why local->UTC here: DeviceTimeService stores UTC (every displayed zman is
 # derived from it through the settings offset), but a wall panel's user thinks in
 # local Israel time. We fetch the DST-correct offset for the entered *date* from
@@ -159,6 +165,36 @@ def _saved():
     _done()
 
 
+# ── city ────────────────────────────────────────────────────────────────────
+
+def _show_city(name):
+    _state["city"].set_text(name or "—")
+
+
+def _load_city():
+    """Fill the city chip from the brain. Failure leaves the dash: the chip is
+    still tappable, so an unreadable setting cannot lock the user out of
+    changing it."""
+    bridge.dispatch(
+        _state["api"], "settings.get", {},
+        on_ok=lambda data: _show_city(data.get("city")),
+        on_err=lambda kind, msg: _show_city(None))
+
+
+def _pick_city(e):
+    import city_picker
+
+    def chosen(city_id):
+        # Send the id alone -- the brain owns the geography behind the name.
+        bridge.dispatch(
+            _state["api"], "settings.update", {"data": {"city": city_id}},
+            on_ok=lambda data: (_show_city(data.get("city")),
+                                store.request_refresh()),
+            on_err=lambda kind, msg: _set_msg("שגיאה: " + msg, theme.DANGER))
+
+    city_picker.open(chosen)
+
+
 def _done():
     import ui_home
     lv.screen_load(ui_home.screen())
@@ -215,6 +251,28 @@ def _field_row(body):
     _build_chip(date_group, "year", "שנה", 116)
 
 
+def _city_row(body):
+    """One tappable line: the current city, and the way to change it.
+
+    Height budget for this screen's 384px body, which has no scrollbar:
+        fields 64 + city 38 + keypad 176 + actions 44 + msg 18 + gaps 32 = 372.
+    Twelve pixels spare. Anything added here has to come out of something else.
+    """
+    row = w_card_button(body)
+    row.set_width(lv.pct(100))
+    row.set_height(38)
+    row.add_event_cb(_pick_city, lv.EVENT.CLICKED, None)
+    caption = w_label(row, theme.FONTS.small, theme.MUTED, "עיר")
+    caption.align(lv.ALIGN.RIGHT_MID, 0, 0)
+    name = w_label(row, theme.FONTS.body, theme.TEXT, "—")
+    # Bounded so a long name cannot run into the caption on the right. The
+    # caption is short and fixed; the name gets everything left of it.
+    name.set_width(lv.pct(70))
+    name.set_style_text_align(lv.TEXT_ALIGN.LEFT, lv.PART.MAIN)
+    name.align(lv.ALIGN.LEFT_MID, 0, 0)
+    _state["city"] = name
+
+
 def _build(api):
     global _state
     scr, body = shell.page_create("כיוון שעה ותאריך")
@@ -225,15 +283,21 @@ def _build(api):
     body.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     body.set_flex_align(lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.START,
                         lv.FLEX_ALIGN.CENTER)
-    body.set_style_pad_row(10, lv.PART.MAIN)
+    # 8, not 10: five stacked rows now, and the body has no scrollbar to fall
+    # back on. Measured budget is in the city-row comment below.
+    body.set_style_pad_row(8, lv.PART.MAIN)
 
     _state = {"api": api, "buf": dict(_DEFAULTS), "active": "hour",
               "chips": {}, "vals": {}, "msg": None}
 
     _field_row(body)
+    _city_row(body)
 
+    # 38, not 40: the city row costs 42px and the body has no slack -- the
+    # אישור button must stay on screen, because there is no scrolling to reach
+    # it with.
     keyboard.build(body, keyboard.LAYOUT_NUMERIC, _on_key,
-                   symbol_keys=(lv.SYMBOL.BACKSPACE,), key_height=40)
+                   symbol_keys=(lv.SYMBOL.BACKSPACE,), key_height=38)
 
     actions = w_group(body, lv.FLEX_FLOW.ROW)
     actions.set_width(lv.pct(100))
@@ -284,4 +348,7 @@ def open(api):
     _state["active"] = "hour"
     _set_msg("", theme.FAINT)
     _refresh()
+    # Re-read every open: the picker may have changed it since the last visit,
+    # and returning from the picker lands back here.
+    _load_city()
     lv.screen_load(_screen)

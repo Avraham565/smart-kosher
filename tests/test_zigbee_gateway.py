@@ -394,6 +394,8 @@ class RegistryTests(GatewayTestCase):
         # This was happening live: the metering configure fails on every
         # device, and because the verdict carried no cluster the hub flipped a
         # perfectly good OnOff device to reporting=false and started retrying.
+        # This hub no longer asks for metering at all, but a coordinator still
+        # running 0.11.x can be mid-flight with one -- so the guard stays.
         self.join_device()
         self._reporting_result("reporting_configured", status="ok",
                                cluster=0x0006)
@@ -407,8 +409,8 @@ class RegistryTests(GatewayTestCase):
         self.assertNotIn(IEEE, self.gateway._reporting_retry)
 
     def test_a_metering_success_cannot_vouch_for_the_switch(self):
-        # The mirror image: once measurements work, a metering success must not
-        # be read as proof that wall-switch reporting is fine.
+        # The mirror image: a metering success from an older coordinator must
+        # not be read as proof that wall-switch reporting is fine.
         self.join_device()
         self._reporting_result("reporting_failed", cluster=0x0006,
                                reason="bind_failed")
@@ -645,64 +647,47 @@ class RegistryTests(GatewayTestCase):
                         "payload": {"short_addr": SHORT, "endpoints": [1, 2]}})
         self.assertEqual([1, 2], self.gateway.devices()[IEEE]["endpoints"])
 
-    def test_a_metering_device_is_recognised_from_its_clusters(self):
-        # The question "does this relay measure power?" had no answer before:
-        # the coordinator only ever spoke OnOff, so a meter and a plain relay
-        # looked identical. Now the device says so itself.
+    def test_discovered_clusters_are_recorded_per_endpoint(self):
+        # Cluster discovery outlived the measurement feature it was built for:
+        # it is how a two-gang switch's second endpoint is known to speak OnOff
+        # at all, rather than being assumed from the model number.
         self.join_device()
         self.uart.feed({"version": 1, "type": "event", "op": "device_clusters",
-                        "payload": {"short_addr": SHORT, "endpoint": 1,
-                                    "in_clusters": [0x0006, 0x0B04, 0x0702]}})
+                        "payload": {"short_addr": SHORT, "endpoint": 2,
+                                    "in_clusters": [0x0000, 0x0006]}})
         device = self.gateway.devices()[IEEE]
-        self.assertEqual(["electrical_measurement", "metering"],
-                         device["measures"])
-        self.assertEqual([6, 2820, 1794], device["clusters"]["1"])
+        self.assertEqual([0, 6], device["clusters"]["2"])
 
-    def test_a_metering_device_is_asked_to_report_its_measurements(self):
+    def test_measurement_clusters_are_never_asked_to_report(self):
+        # Electrical measurement was removed (2026-08-05). A relay that still
+        # advertises the metering clusters must be left alone: asking would
+        # reopen the failure that used to knock healthy devices out of
+        # reporting, for a feature the product no longer has.
         self.join_device()
         before = len([m for m in self.uart.written
                       if m["op"] == "enable_reporting"])
         self.uart.feed({"version": 1, "type": "event", "op": "device_clusters",
                         "payload": {"short_addr": SHORT, "endpoint": 1,
                                     "in_clusters": [0x0006, 0x0B04, 0x0702]}})
-        asked = [m["payload"].get("cluster")
-                 for m in self.uart.written if m["op"] == "enable_reporting"]
-        self.assertEqual({0x0B04, 0x0702}, set(asked[before:]))
+        asked = [m for m in self.uart.written
+                 if m["op"] == "enable_reporting"][before:]
+        self.assertEqual([], asked)
+        self.assertNotIn("measures", self.gateway.devices()[IEEE])
+        self.assertNotIn("measurements", self.gateway.devices()[IEEE])
 
-    def test_measurements_arrive_and_merge_across_clusters(self):
-        # Each cluster reports only its own attributes, so a replace would
-        # make voltage and energy erase one another.
-        self.join_device()
-        self.uart.feed({"version": 1, "type": "event",
-                        "op": "measurement_report",
-                        "payload": {"short_addr": SHORT, "endpoint": 1,
-                                    "cluster": 0x0B04, "active_power": 137,
-                                    "rms_voltage": 231}})
-        self.uart.feed({"version": 1, "type": "event",
-                        "op": "measurement_report",
-                        "payload": {"short_addr": SHORT, "endpoint": 1,
-                                    "cluster": 0x0702, "energy": 90210}})
-        device = self.gateway.devices()[IEEE]
-        self.assertEqual({"active_power": 137, "rms_voltage": 231,
-                          "energy": 90210}, device["measurements"])
-        self.assertIn("measured_age_ms", device)
-
-    def test_a_measurement_never_disturbs_the_on_off_state(self):
-        # Power flowing is not the same claim as "the relay is on".
+    def test_a_stray_measurement_report_is_ignored(self):
+        # A coordinator still running 0.11.x can send these. They must be
+        # dropped without touching the on/off state -- power flowing is not the
+        # same claim as "the relay is on".
         self.join_device()
         self.uart.feed(report_event(True))
         self.uart.feed({"version": 1, "type": "event",
                         "op": "measurement_report",
                         "payload": {"short_addr": SHORT, "endpoint": 1,
                                     "cluster": 0x0B04, "active_power": 0}})
-        self.assertTrue(self.gateway.devices()[IEEE]["on_off"])
-
-    def test_a_plain_relay_is_not_claimed_to_measure_anything(self):
-        self.join_device()
-        self.uart.feed({"version": 1, "type": "event", "op": "device_clusters",
-                        "payload": {"short_addr": SHORT, "endpoint": 1,
-                                    "in_clusters": [0x0000, 0x0006]}})
-        self.assertNotIn("measures", self.gateway.devices()[IEEE])
+        device = self.gateway.devices()[IEEE]
+        self.assertTrue(device["on_off"])
+        self.assertNotIn("measurements", device)
 
     def test_device_left_removes_it_from_the_registry(self):
         self.join_device()
@@ -822,10 +807,15 @@ class DeviceRemovalTests(GatewayTestCase):
         crud = CrudService(self.repo)
         self.api = Api(
             crud, ControlService(Executor(self.gateway, journal), self.repo),
+            # Geography only. candle_offset/tzais_offset used to be seeded here
+            # too; they are not settings any more (candle lighting is a
+            # constant, Shabbat exit is an angle) and the API drops them on
+            # read, so carrying them just left numbers no part of the system
+            # holds sitting in a fixture, waiting to be believed.
             SettingsStore("/nonexistent-settings.json",
                           defaults={"lat": 31.77, "lon": 35.21,
+                                    "elevation": 779,
                                     "utc_offset_minutes": 120,
-                                    "candle_offset": 20, "tzais_offset": 40,
                                     "in_israel": True}),
             views=ViewService(self.repo), device_time=DeviceTimeService(None),
             zigbee=self.gateway)

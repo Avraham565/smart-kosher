@@ -20,6 +20,12 @@ from smart_kosher.web.server import create_app
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _minutes(hhmm):
+    """"HH:MM" from the today view -> minutes since local midnight."""
+    hours, minutes = hhmm.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
 def _temp_settings_path():
     fd, path = tempfile.mkstemp(suffix=".json", prefix="sk_test_")
     os.close(fd)
@@ -36,8 +42,19 @@ def _build_client(gateway_responses=None):
     control  = ControlService(executor, repo)
     settings = SettingsStore(
         _temp_settings_path(),
+        # candle_offset/tzais_offset are seeded here ON PURPOSE, standing in for
+        # a device whose settings.json was written before the two became fixed
+        # product rules -- a stored value beats a default, so this is exactly
+        # the case that must NOT be able to move Shabbat.
+        #
+        # Both MUST differ from what the code computes, or the assertions prove
+        # nothing. This seeded 18 while CANDLE_OFFSET_MINUTES was 20; when the
+        # constant later became 18 the two collided and the test passed whether
+        # the API reported the constant or echoed storage. 40 is the old
+        # Jerusalem custom and is not a value any constant here holds.
+        # See test_fixed_shabbat_offsets_*.
         defaults={"city": "ירושלים", "lat": 31.7683, "lon": 35.2137,
-                  "utc_offset_minutes": 120, "candle_offset": 18, "tzais_offset": 40},
+                  "utc_offset_minutes": 120, "candle_offset": 40, "tzais_offset": 40},
     )
     app = create_app(crud, control, settings, repo)
     return TestClient(app), crud
@@ -516,12 +533,12 @@ class TestSettingsRoutes(AsyncCase):
         async def go():
             client, _ = _build_client()
             res = await client.put("/api/settings", body={
-                "lat": 32.0853, "lon": 34.7818, "candle_offset": 20
+                "lat": 32.0853, "lon": 34.7818, "utc_offset_minutes": 180
             })
             self.assertEqual(200, res.status_code)
             data = res.json["data"]
             self.assertAlmostEqual(32.0853, data["lat"])
-            self.assertEqual(20, data["candle_offset"])
+            self.assertEqual(180, data["utc_offset_minutes"])
         self._run(go())
 
     def test_update_unknown_key_returns_400(self):
@@ -536,9 +553,9 @@ class TestSettingsRoutes(AsyncCase):
     def test_update_persists_across_get(self):
         async def go():
             client, _ = _build_client()
-            await client.put("/api/settings", body={"tzais_offset": 50})
+            await client.put("/api/settings", body={"city": "בני ברק"})
             res = await client.get("/api/settings")
-            self.assertEqual(50, res.json["data"]["tzais_offset"])
+            self.assertEqual("בני ברק", res.json["data"]["city"])
         self._run(go())
 
     def test_bad_json_returns_400(self):
@@ -591,7 +608,7 @@ class TestSettingsRoutes(AsyncCase):
             client, _ = _build_client()
             res = await client.put("/api/settings", body={
                 "lat": 32.08, "lon": 34.78, "utc_offset_minutes": 120,
-                "candle_offset": 18, "tzais_offset": 40, "in_israel": True,
+                "in_israel": True,
             })
             self.assertEqual(200, res.status_code)
         self._run(go())
@@ -618,11 +635,113 @@ class TestSettingsRoutes(AsyncCase):
             self.assertEqual(400, res.status_code)
         self._run(go())
 
-    def test_candle_offset_out_of_range_returns_400(self):
+    def test_fixed_shabbat_offsets_cannot_be_written(self):
+        # candle_offset is a product rule, not a setting: 18 min before sunset,
+        # everywhere in Israel. A write is rejected outright rather than
+        # accepted into a file nothing reads. tzais_offset is rejected for a
+        # different reason -- Shabbat exit is an angle now, so there is no such
+        # quantity anywhere in the system to write to.
         async def go():
             client, _ = _build_client()
-            res = await client.put("/api/settings", body={"candle_offset": -1})
-            self.assertEqual(400, res.status_code)
+            for key in ("candle_offset", "tzais_offset"):
+                res = await client.put("/api/settings", body={key: 25})
+                self.assertEqual(400, res.status_code, key)
+                self.assertIn(key, res.json["error"])
+        self._run(go())
+
+    def test_fixed_shabbat_offsets_survive_a_stale_settings_file(self):
+        # The fixture seeds the pre-decision values, standing in for a device
+        # provisioned before the rule existed. A stored value normally beats a
+        # default, so without the keys being removed from the settings layer
+        # entirely, that file would keep moving Shabbat forever -- and silently,
+        # since nothing would report a disagreement.
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/settings")
+            self.assertEqual(200, res.status_code)
+            self.assertEqual(18, res.json["data"]["candle_offset"])
+            self.assertNotIn("tzais_offset", res.json["data"])
+        self._run(go())
+
+    def test_choosing_a_city_applies_its_whole_geography(self):
+        # A city name is a location, not a label. If only the name changed, the
+        # previous city's coordinates and elevation would keep deciding every
+        # zman -- Tel Aviv computed at Jerusalem's 779 m is five minutes wrong.
+        async def go():
+            client, _ = _build_client()
+            res = await client.put("/api/settings", body={"city": "tel_aviv"})
+            self.assertEqual(200, res.status_code)
+            data = res.json["data"]
+            self.assertEqual("תל אביב", data["city"])
+            self.assertAlmostEqual(32.0853, data["lat"], places=4)
+            self.assertAlmostEqual(34.7818, data["lon"], places=4)
+            self.assertEqual(20, data["elevation"])
+        self._run(go())
+
+    def test_choosing_a_city_by_its_hebrew_name_works_too(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.put("/api/settings", body={"city": "צפת"})
+            self.assertEqual(200, res.status_code)
+            self.assertEqual(780, res.json["data"]["elevation"])
+        self._run(go())
+
+    def test_explicit_coordinates_beat_the_city_list(self):
+        # Somewhere the list does not cover, described by hand.
+        async def go():
+            client, _ = _build_client()
+            res = await client.put("/api/settings", body={
+                "city": "tel_aviv", "lat": 31.5, "lon": 35.0, "elevation": 400})
+            self.assertEqual(200, res.status_code)
+            data = res.json["data"]
+            self.assertAlmostEqual(31.5, data["lat"], places=4)
+            self.assertEqual(400, data["elevation"])
+        self._run(go())
+
+    def test_an_unlisted_city_name_is_kept_as_written(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.put("/api/settings", body={
+                "city": "קוממיות", "lat": 31.6, "lon": 34.75, "elevation": 90})
+            self.assertEqual(200, res.status_code)
+            self.assertEqual("קוממיות", res.json["data"]["city"])
+            self.assertEqual(90, res.json["data"]["elevation"])
+        self._run(go())
+
+    def test_the_city_list_is_offered_for_picking(self):
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/settings/cities")
+            self.assertEqual(200, res.status_code)
+            cities = res.json["data"]
+            self.assertEqual(40, len(cities))
+            for city in cities:
+                self.assertEqual(
+                    {"id", "name_he", "lat", "lon", "elevation"}, set(city))
+            # Sorted by name so the picker reads in order.
+            self.assertEqual(sorted(c["name_he"] for c in cities),
+                             [c["name_he"] for c in cities])
+        self._run(go())
+
+    def test_a_stale_settings_file_does_not_move_computed_zmanim(self):
+        # The claim that matters: not just what /api/settings reports, but what
+        # the zmanim themselves are computed from.
+        async def go():
+            client, _ = _build_client()
+            res = await client.get("/api/today?date=2026-06-05")
+            self.assertEqual(200, res.status_code)
+            zmanim = res.json["data"]["zmanim"]
+            shkia = _minutes(zmanim["shkia"])
+            # Shabbat exit is 8.5 degrees below the horizon, not a stored
+            # number of minutes -- in June that lands past 36 after sunset,
+            # which is exactly what the old fixed offset got wrong.
+            self.assertGreater(
+                _minutes(zmanim["tset_hakohavim_shabbat"]) - shkia, 36)
+            # candle lighting is measured from sea-level sunset, so at
+            # Jerusalem's elevation the gap to the displayed shkia is larger
+            # than 18 -- but it must still be a fixed 18 from its own anchor,
+            # i.e. unaffected by anything stale in the settings file.
+            self.assertLess(_minutes(zmanim["candle_lighting"]), shkia)
         self._run(go())
 
 

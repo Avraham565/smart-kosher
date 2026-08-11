@@ -10,9 +10,32 @@ ZMAN_KEYS = {
     "sof_zman_tfilla_gra", "sof_zman_tfilla_mga",
     "chatzot_hayom", "mincha_gedola", "mincha_gedola_30min",
     "mincha_ketana", "plag_hamincha", "shkia", "tset_hakohavim",
-    "tset_hakohavim_shabbat", "tset_hakohavim_tsom",
+    "tset_hakohavim_shabbat",
     "tset_hakohavim_rabeinu_tam", "chatzot_halayla", "candle_lighting",
 }
+
+# Zmanim the product used to compute and no longer does. A stored schedule may
+# still name one, and validation alone would only make it fail forever in
+# silence -- so application.migrations purges them at startup and reports what
+# it dropped, rather than leaving a switch the user set that never fires again.
+#
+# tset_hakohavim_tsom was a flat 30 minutes after sunset. The reference library
+# has no such concept: it was invented here, matched nothing upstream, and was
+# retired when the zmanim were aligned to it.
+RETIRED_ZMAN_KEYS = {"tset_hakohavim_tsom"}
+
+
+def retired_zman_key(schedule):
+    """Return the retired zman this schedule fires on, or ``None``."""
+    if not isinstance(schedule, dict):
+        return None
+    if schedule.get("trigger_type") not in ("zman", "zman_offset"):
+        return None
+    trigger_data = schedule.get("trigger_data")
+    if not isinstance(trigger_data, dict):
+        return None
+    zman = trigger_data.get("zman")
+    return zman if zman in RETIRED_ZMAN_KEYS else None
 
 RECURRENCE_TYPES = {
     "daily", "days_of_week", "assur_bemelacha", "erev_assur_bemelacha",

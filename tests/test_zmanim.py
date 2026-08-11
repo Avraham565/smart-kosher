@@ -4,6 +4,7 @@ from datetime import date, timedelta
 import smart_kosher.zmanim.hebrew_cal as hebrew_cal
 from smart_kosher.data import get_city, load_cities
 from smart_kosher.zmanim import (
+    CANDLE_OFFSET_MINUTES,
     compute_zmanim,
     date_info,
     gregorian_to_jewish,
@@ -20,21 +21,49 @@ class ZmanimTests(unittest.TestCase):
         self.assertEqual((5786, 3, 20), (info["j_year"], info["j_month"], info["j_day"]))
         self.assertEqual(6, info["dow"])
 
-        values = compute_zmanim(2026, 6, 5, 31.7683, 35.2137, 754, 40, 40)
+        values = compute_zmanim(2026, 6, 5, 31.7683, 35.2137, 779)
         self.assertLess(values["netz_hachama"], values["chatzot_hayom"])
         self.assertLess(values["chatzot_hayom"], values["shkia"])
-        self.assertAlmostEqual(
-            values["tset_hakohavim_shabbat"] - values["shkia"], 40, places=6
-        )
-        self.assertAlmostEqual(218.4333, compute_zmanim(
-            2024, 3, 20, 31.7683, 35.2137, 754
-        )["netz_hachama"], delta=0.05)
+        self.assertLess(values["shkia"], values["tset_hakohavim_shabbat"])
 
-    def test_city_specific_tzais_offset_is_used(self):
-        values = compute_zmanim(2026, 6, 5, 32.0853, 34.7818, 0, 18, 42)
-        self.assertAlmostEqual(
-            values["tset_hakohavim_shabbat"] - values["shkia"], 42, places=6
-        )
+    def test_shabbat_exit_is_an_angle_not_a_fixed_offset(self):
+        # The old model added a flat 36 minutes to sunset. 36 is only what 8.5
+        # degrees happens to equal in Jerusalem at the equinox; the gap widens
+        # through the summer, and freezing it let Shabbat out early in June.
+        # This is the regression that pins the difference as real.
+        equinox = compute_zmanim(2026, 3, 20, 31.7683, 35.2137, 779)
+        midsummer = compute_zmanim(2026, 6, 20, 31.7683, 35.2137, 779)
+
+        equinox_gap = equinox["tset_hakohavim_shabbat"] - equinox["shkia"]
+        summer_gap = midsummer["tset_hakohavim_shabbat"] - midsummer["shkia"]
+
+        self.assertGreater(summer_gap - equinox_gap, 4.0)
+
+    def test_shabbat_exit_and_nightfall_are_one_definition(self):
+        # Two product-level names, one halachic moment. Kept as separate keys so
+        # a future stricter Shabbat exit is a one-line change that saved
+        # schedules follow automatically.
+        values = compute_zmanim(2026, 6, 5, 31.7683, 35.2137, 779)
+        self.assertEqual(values["tset_hakohavim"], values["tset_hakohavim_shabbat"])
+
+    def test_elevation_moves_only_the_visible_sunrise_and_sunset(self):
+        # The reference library corrects getSunrise/getSunset for elevation but
+        # derives every other zman from sea level (useElevation defaults off).
+        # Getting this backwards is what shipped Jerusalem's sunset ~5 minutes
+        # early, so it is pinned rather than left to the golden table alone.
+        sea = compute_zmanim(2026, 6, 5, 31.7683, 35.2137, 0)
+        high = compute_zmanim(2026, 6, 5, 31.7683, 35.2137, 779)
+
+        self.assertGreater(high["shkia"] - sea["shkia"], 4.0)
+        self.assertLess(high["netz_hachama"] - sea["netz_hachama"], -4.0)
+
+        for key in ("sof_zman_shema_gra", "sof_zman_tfilla_gra", "mincha_gedola",
+                    "mincha_ketana", "plag_hamincha", "chatzot_hayom",
+                    "chatzot_halayla", "candle_lighting", "tset_hakohavim",
+                    "tset_hakohavim_shabbat", "tset_hakohavim_rabeinu_tam",
+                    "alot_hashachar", "talit_and_tefillin"):
+            with self.subTest(zman=key):
+                self.assertEqual(sea[key], high[key])
 
     def test_round_trip_every_day_in_supported_software_range(self):
         current = date(2024, 1, 1)
@@ -55,14 +84,34 @@ class ZmanimTests(unittest.TestCase):
                 values = compute_zmanim(
                     2026, 6, 5,
                     city["lat"], city["lon"], city["elevation"],
-                    city["candle_offset"], city["tzais_offset"],
                 )
                 self.assertLess(values["candle_lighting"], values["shkia"])
-                self.assertAlmostEqual(
-                    city["tzais_offset"],
-                    values["tset_hakohavim_shabbat"] - values["shkia"],
-                    places=6,
-                )
+                self.assertLess(values["shkia"], values["tset_hakohavim_shabbat"])
+                self.assertLess(values["netz_hachama"], values["chatzot_hayom"])
+
+    def test_city_profiles_carry_geography_only(self):
+        # A city is a location. Halachic offsets are product rules, not city
+        # data -- they lived here once, disagreed with what was computed, and
+        # nobody noticed because nothing read them.
+        for city_id, city in load_cities().items():
+            with self.subTest(city=city_id):
+                self.assertEqual(
+                    {"name_he", "lat", "lon", "elevation"}, set(city))
+
+    def test_candle_lighting_is_the_product_offset_before_sea_level_sunset(self):
+        # Pins the one country-wide candle offset. Measured at altitude 0, where
+        # shkia (elevation-corrected) and the sea-level sunset candle lighting is
+        # derived from are the same instant. They are NOT the same higher up:
+        # in Jerusalem (779 m) shkia is minutes later than sea-level sunset, so
+        # candle lighting lands ~23 min before the shkia the UI displays, not 18.
+        # That is deliberate, and it is what the reference library does --
+        # getCandleLighting reads sea level sunset whatever useElevation says.
+        values = compute_zmanim(2026, 6, 5, 32.0853, 34.7818, 0)
+        self.assertAlmostEqual(
+            CANDLE_OFFSET_MINUTES,
+            values["shkia"] - values["candle_lighting"],
+            places=6,
+        )
 
     def test_city_loader_returns_defensive_copies(self):
         city = get_city("jerusalem")

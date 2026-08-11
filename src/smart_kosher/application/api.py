@@ -10,9 +10,10 @@ errors.
 import gc
 import time
 
-from ..data import load_cities
+from ..data import load_cities, resolve_city
 from ..domain.devices import DeviceValidationError
 from ..domain.schedules import ScheduleValidationError
+from ..zmanim import CANDLE_OFFSET_MINUTES
 from .crud_service import InUseError, NotFoundError
 from .device_time import ClockUnsupportedError
 
@@ -77,8 +78,46 @@ def _memory_info():
 
 # ── Settings validation ───────────────────────────────────────────────────────
 
-_ALLOWED_SETTINGS_KEYS = {"city", "lat", "lon", "utc_offset_minutes",
-                          "in_israel", "candle_offset", "tzais_offset"}
+# candle_offset is NOT here: it is a fixed product rule (18 min before sunset),
+# identical across Israel, with no UI and no per-community knob. A write to it is
+# rejected as an unknown key rather than silently accepted into a file nothing
+# reads. tzais_offset is not here either, and no longer exists anywhere: Shabbat
+# exit is an angle (8.5 degrees below the horizon), not a minute count.
+_ALLOWED_SETTINGS_KEYS = {"city", "lat", "lon", "elevation",
+                          "utc_offset_minutes", "in_israel"}
+
+# Reported on read so the display shows what is actually computed. A device
+# whose settings.json predates the decision still has the old numbers stored;
+# echoing those back would show a Shabbat time the system does not use.
+_FIXED_SETTINGS = {"candle_offset": CANDLE_OFFSET_MINUTES}
+
+
+def _with_city_geography(data):
+    """Expand a packaged city into the coordinates it stands for.
+
+    Picking a city is picking a location, so the three numbers that decide the
+    zmanim travel with the name. Without this, changing only ``city`` leaves the
+    previous city's latitude, longitude and elevation in place and every zman
+    stays wrong -- which is precisely the failure that ran for years when the
+    per-city elevations in cities.json were never read by anything.
+
+    Explicit coordinates in the same request win: a caller sending a city name
+    alongside its own lat/lon is describing somewhere the list does not cover,
+    and that is allowed.
+    """
+    if "city" not in data:
+        return data
+    resolved = resolve_city(data["city"])
+    if resolved is None:
+        return data
+
+    _, city = resolved
+    expanded = dict(data)
+    expanded["city"] = city["name_he"]
+    for field, key in (("lat", "lat"), ("lon", "lon"), ("elevation", "elevation")):
+        if key not in data:
+            expanded[key] = city[field]
+    return expanded
 
 
 def _is_awaitable(value):
@@ -107,12 +146,17 @@ def _setting_error(key, value):
     elif key == "lon":
         if not _is_number(value) or not -180 <= value <= 180:
             return "lon must be a number in -180..180"
+    elif key == "elevation":
+        # Non-negative mirrors the reference implementation, which rejects a
+        # negative elevation outright. Tiberias and the Dead Sea shore are below
+        # sea level and are configured as 0, which is what it would compute for
+        # them anyway. The ceiling is well clear of Israel's highest inhabited
+        # ground and only guards against a typo becoming a zman.
+        if not _is_number(value) or not 0 <= value <= 9000:
+            return "elevation must be a number in 0..9000"
     elif key == "utc_offset_minutes":
         if not _is_int(value) or not -840 <= value <= 840:
             return "utc_offset_minutes must be an integer in -840..840"
-    elif key in ("candle_offset", "tzais_offset"):
-        if not _is_int(value) or not 0 <= value <= 1440:
-            return "{} must be an integer in 0..1440".format(key)
     elif key == "in_israel":
         if not isinstance(value, bool):
             return "in_israel must be a boolean"
@@ -305,8 +349,17 @@ class Api:
     # ── Settings ──────────────────────────────────────────────────────────────
 
     def _settings_get(self, params):
-        data = self._settings.get()
+        # Project onto the keys this API defines rather than echoing storage.
+        # A device provisioned before a rule changed still carries the retired
+        # keys in its settings.json, and reporting those back would show a
+        # Shabbat time the system does not compute -- tzais_offset sat there as
+        # a flat 40 long after Shabbat exit became an angle. The write path
+        # already rejects unknown keys; this is the same guarantee outbound.
+        stored = self._settings.get()
+        data = {key: value for key, value in stored.items()
+                if key in _ALLOWED_SETTINGS_KEYS}
         data["device_time"] = _device_time_string()
+        data.update(_FIXED_SETTINGS)
         return data
 
     def _settings_update(self, params):
@@ -320,7 +373,7 @@ class Api:
             message = _setting_error(key, value)
             if message:
                 raise ApiError(BAD_REQUEST, message)
-        self._settings.update(data)
+        self._settings.update(_with_city_geography(data))
         return self._settings.get()
 
     def _cities(self, params):

@@ -11,8 +11,18 @@
 # at the wall switch -- which makes "someone touched it" a scriptable event.
 #
 # Safety: only the two ieee addresses passed to run() are ever actuated, and
-# every relay is returned to the state it started in. Nothing is written to
-# /data -- no schedule, room or device of yours is created, changed or deleted.
+# every relay is returned to the state it started in. No schedule, room or
+# endpoint of yours is created, changed or deleted.
+#
+# ONE EXCEPTION, and it is not obvious: the gateway is built with the real
+# registry_path, so /data/zigbee_devices.json IS written -- the gateway
+# rediscovers on start and saves what it currently sees. A relay that is off
+# the network during a run is therefore dropped from the registry by the run.
+# That happened on 2026-08-11: the file went from two devices to one, and the
+# header used to claim nothing under /data was touched at all.
+#
+# If you are running this against a rig where a device may be offline, copy
+# /data/zigbee_devices.json first.
 #
 # Usage (from the host):  python panel_mp/run_hwtest.py
 
@@ -268,6 +278,19 @@ async def _run(actuator, dut):
     print("dut      {} -> {}".format(dut, h.short_of(dut)))
     if not h.short_of(actuator) or not h.short_of(dut):
         print("ABORT: both devices must be in the zigbee registry")
+        # Name what IS paired. Without this the abort is a dead end, and a
+        # default address that went stale when a relay was swapped looks
+        # identical to a radio that is down -- which is how this suite sat
+        # unrunnable without anyone noticing.
+        try:
+            known = list(h.gw._registry)
+        except Exception:
+            known = []
+        print("registry holds {} device(s):".format(len(known)))
+        for ieee in known:
+            print("   {}  -> {}".format(ieee, h.short_of(ieee)))
+        print("re-run with:  python panel_mp/run_hwtest.py --actuator <ieee> "
+              "--dut <ieee>")
         return
 
     dut_initial = None

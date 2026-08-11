@@ -23,6 +23,9 @@ from smart_kosher.adapters.json_repository import JsonRepository
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.crud_service import CrudService
 from smart_kosher.application.executor import Executor
+from smart_kosher.application.migrations import apply_all as apply_migrations
+from smart_kosher.application.migrations import describe as describe_migrations
+from smart_kosher.application.views import SETTINGS_DEFAULTS
 from smart_kosher.web.server import create_app
 
 # ── Storage mode ──────────────────────────────────────────────────────────────
@@ -47,17 +50,17 @@ def main():
     executor = Executor(gateway, journal)
     crud     = CrudService(repo)
     control  = ControlService(executor, repo)
+    # Shared defaults, so the dev server computes the same zmanim as the real
+    # products instead of its own (it had candle_offset 18 against product A's 20).
+    defaults = dict(SETTINGS_DEFAULTS)
+    defaults["city"] = "ירושלים"
     settings = SettingsStore(
         os.path.join(JSON_DIR if STORAGE == "json" else ".", "settings.json"),
-        defaults={
-            "city": "ירושלים",
-            "lat": 31.7683,
-            "lon": 35.2137,
-            "utc_offset_minutes": 120,
-            "candle_offset": 18,
-            "tzais_offset": 40,
-        },
+        defaults=defaults,
     )
+
+    for line in describe_migrations(apply_migrations(repo, settings)):
+        print("  " + line)
 
     def status_info():
         return {

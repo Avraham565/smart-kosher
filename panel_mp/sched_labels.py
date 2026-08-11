@@ -10,7 +10,6 @@ ZMAN_NAMES = {
     "mincha_ketana": "מנחה קטנה", "plag_hamincha": "פלג המנחה",
     "shkia": "שקיעה", "candle_lighting": "הדלקת נרות",
     "tset_hakohavim": "צאת הכוכבים", "tset_hakohavim_shabbat": "צאת שבת",
-    "tset_hakohavim_tsom": "צאת תענית",
     "tset_hakohavim_rabeinu_tam": "רבינו תם", "chatzot_halayla": "חצות הלילה",
 }
 
@@ -20,7 +19,7 @@ ZMAN_ORDER = (
     "sof_zman_tfilla_mga", "sof_zman_tfilla_gra",
     "chatzot_hayom", "mincha_gedola", "mincha_gedola_30min",
     "mincha_ketana", "plag_hamincha", "shkia", "candle_lighting",
-    "tset_hakohavim", "tset_hakohavim_shabbat", "tset_hakohavim_tsom",
+    "tset_hakohavim", "tset_hakohavim_shabbat",
     "tset_hakohavim_rabeinu_tam", "chatzot_halayla",
 )
 

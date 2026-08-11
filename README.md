@@ -5,67 +5,43 @@ and Jewish-calendar scheduling. The intended product uses a local wall-mounted
 controller, requires no cloud service or smartphone, and prepares device
 behavior for Shabbat and Jewish holidays.
 
-The repository now has two kinds of truth:
+## The two products
 
-- `src/` contains the tested, hardware-independent product core.
-- `experiments/zigbee_probe/` contains the hardware-proven Zigbee/S3/H2 work.
+| | Product A — the wall panel | Product B — headless hub |
+|---|---|---|
+| status | **active** | **paused** — code kept, not being worked on |
+| hardware | CrowPanel Advance 7" (ESP32-S3) + ESP32-H2 | M5 AtomS3 Lite + M5 NanoC6 |
+| runs | `panel_mp/` — UI **and** brain in one MicroPython process | `deploy/atoms3/` — API only, no UI |
+| client | itself (touchscreen) | `client/` — a Windows app over USB or LAN |
+| schedules fire? | yes | **no — the engine is shared, but no task starts it** |
 
-Hardware-facing code should be promoted from `experiments/` only after it has
-worked on real devices.
+Both share one brain: `src/smart_kosher/`, imported on the device from `/lib`.
 
-## Current Status
-
-Implemented and tested in the Python product core:
-
-- Offline Jewish calendar, holidays, Omer counting, weekly parasha, and zmanim.
-- Deterministic event planning from fixed local times or calculated zmanim.
-- Israeli daylight-saving-time resolution without an online service.
-- Cross-midnight schedules and bounded catch-up after delayed execution.
-- Validated domain models for schedules, actions, events, zones, endpoints,
-  and groups.
-- Idempotent execution with bounded retries, ACK handling, and an execution
-  journal.
-- JSON persistence with temporary files, backup recovery, and defensive copies.
-- In-memory adapters and a deterministic gateway simulator for tests.
-
-Hardware-proven in `experiments/zigbee_probe/`:
-
-- CrowPanel S3 to ESP32-H2 slot UART mapping:
-  - S3 GPIO5 -> H2 GPIO2
-  - H2 GPIO24 -> S3 GPIO19
-  - UART1, 115200 baud
-- CRC32 + JSON line framing between S3 and H2.
-- H2 coordinator firmware can form or restore a Zigbee network.
-- S3 can send `permit_join`.
-- One real Zigbee device can join.
-- S3 can send `on_off` and verify state with `read_attr`.
-
-Not implemented or not yet product-integrated:
-
-- A production Python/MicroPython hardware gateway in `src/`.
-- Multiple first-class Zigbee devices at the H2 firmware level.
-- App-level persistence of the discovered device list after reset.
-- H2-side idempotency using product `event_id`.
-- Real RTC retention, watchdog, LVGL product UI, deployment, and power-loss
-  behavior.
-
-## Project Structure
+## Repository map
 
 ```text
-src/smart_kosher/
-|-- zmanim/            Offline calendar and zmanim calculations
-|-- domain/            Business models and validation rules
-|-- application/       Planner, Executor, and RecoveryService
-|-- ports/             Clock, Repository, Gateway, and Journal contracts
-|-- adapters/          JSON, memory, and gateway simulator for tests
-`-- data/              Packaged and validated city profiles
+src/smart_kosher/         the brain — hardware-independent, unit-tested
+  zmanim/                 offline calendar and zmanim calculations
+  domain/                 business models and validation rules
+  application/            Planner, Executor, RecoveryService, Api dispatcher
+  ports/                  Clock, Repository, Gateway, Journal contracts
+  adapters/               JSON storage, RTC, UART codec, ZigbeeGateway
+  web/                    HTTP channel (Microdot) over the Api
+  data/                   packaged and validated city profiles
+
+panel_mp/                 PRODUCT A firmware: LVGL UI + brain + scheduler
+deploy/atoms3/            PRODUCT B firmware (paused)
+client/                   Windows desktop client for product B (paused)
 
 experiments/zigbee_probe/
-|-- h2_coordinator_firmware/   ESP32-H2 coordinator firmware
-`-- tools/                     S3 MicroPython probes and build/flash helpers
+  h2_coordinator_firmware/  ESP32-H2 / NanoC6 Zigbee coordinator (C, ESP-IDF)
+  tools/                    build, flash, and probe scripts
 
-tests/                        Unit tests for the product core
-data-sheets/                  Local device notes and vendor references
+tests/                    unit tests for the brain, gateway and scheduler
+  data/                   committed reference values (zmanim golden table)
+tools/zmanim_golden/      regenerates that table from KosherJava (needs a JDK)
+docs/                     protocol, hardware audit, H2 production plan
+data-sheets/              local device notes and vendor references
 ```
 
 `src` is a source directory, not an import namespace:
@@ -78,10 +54,10 @@ from smart_kosher.zmanim import compute_zmanim
 
 ## Architecture
 
-The product core follows a lightweight Ports and Adapters structure:
+The brain follows a lightweight Ports and Adapters structure:
 
 ```text
-Repository -> Planner -> Event -> Executor -> DeviceGateway
+Repository -> Planner -> Event -> Executor -> DeviceGateway -> H2 -> Zigbee
                                       |
                                       v
                                 EventJournal
@@ -90,15 +66,13 @@ Repository -> Planner -> Event -> Executor -> DeviceGateway
 - `zmanim` is independent from all other application layers.
 - `domain` contains JSON-native models and validation without I/O.
 - `application` coordinates use cases without knowing about files or Zigbee.
+  `Api.dispatch(op, params)` is the single command surface; every channel
+  (the panel UI in-process, HTTP, USB serial) is a thin adapter over it.
 - `ports` define runtime infrastructure contracts.
-- `adapters` implement persistence, memory test doubles, the UART frame codec,
-  and a simulator for application tests.
+- `adapters` implement persistence, the UART frame codec, the real
+  `ZigbeeGateway`, and test doubles.
 
-The deleted `ZigbeeGateway` adapter was intentionally removed because it used a
-planned `zcl_command` protocol that did not match the hardware-proven H2
-coordinator. The next hardware gateway should be built from the experiment.
-
-## Behavioral Contracts
+## Behavioral contracts
 
 ### Time
 
@@ -113,12 +87,54 @@ coordinator. The next hardware gateway should be built from the experiment.
 - An annual February 29 recurrence runs only in leap years.
 - Each generated event keeps its recurrence `source_date`, including when an
   offset moves execution across midnight.
+- Zmanim conform to **KosherJava 2.5.0**, the library this implementation was
+  derived from. `tests/test_zmanim_reference.py` checks all 18 against that
+  library's own committed output, agreeing to within a second. The normal run
+  sweeps a fixed sample spanning every city, month and year, which keeps it
+  under half a second. The exhaustive sweep of all 58,440 city-days (over a
+  million comparisons, ~6 s) is opt-in:
 
-### Execution and Recovery
+  ```
+  ZMANIM_FULL_REFERENCE=1 python -m pytest tests/test_zmanim_reference.py
+  ```
+
+  Run it when touching `src/smart_kosher/zmanim`, changing a city, or
+  regenerating the table. Regenerate with `python tools/zmanim_golden/generate.py`
+  (needs a JDK; nothing else in the project does).
+- Candle lighting is a fixed product rule, identical everywhere in Israel and
+  not a setting: `CANDLE_OFFSET_MINUTES` = 18 minutes before sunset, the
+  reference library's own default. There is no UI for it and the API rejects a
+  write; a `settings.json` written before this rule cannot override it, and
+  reads report the constant rather than what is stored.
+- Shabbat exit is an **angle, not an offset**: 8.5° below the horizon, which is
+  what the reference library calls tzais. It was a flat 36 minutes once — the
+  value that angle happens to take in Jerusalem at the equinox — which let
+  Shabbat out roughly six minutes early in June.
+- Elevation corrects the displayed `netz_hachama` and `shkia` and nothing else.
+  Every derived zman — temporal hours, MGA, Rabbeinu Tam, candle lighting — is
+  computed from sea level, matching the reference library, whose `useElevation`
+  defaults to off. So above sea level the gap between candle lighting and the
+  displayed `shkia` is larger than 18 minutes (about 23 in Jerusalem), and that
+  is correct. City elevations are sampled from the SRTM 30 m model at each
+  city's own coordinate.
+- **40 packaged cities** span the country — Eilat and Mitzpe Ramon in the south,
+  Nahariya and Kiryat Shmona in the north, sea level through 850 m — and the
+  user picks the nearest. Choosing one applies its latitude, longitude *and*
+  elevation together: `PUT /api/settings {"city": "tel_aviv"}` sets all three,
+  because a name that moved without its coordinates is how a location silently
+  goes wrong. Explicit coordinates in the same request win, so a locality the
+  list does not cover can still be entered by hand. `tests/test_cities.py`
+  checks the list as data — every coordinate inside Israel, no two entries the
+  same place, and a coherent day computed at each.
+
+### Execution and recovery
 
 - Every event has a deterministic `event_id`.
 - `Executor` retries only up to `max_attempts`.
-- Only an execution-success gateway status is recorded as executed.
+- Only an execution-success gateway status is recorded as executed. Against a
+  coordinator that can prove delivery, that means the device's own radio
+  confirmed the frame — a command that never reached the relay is **not**
+  journaled, and stays eligible for retry and catch-up.
 - A previously journaled event is not sent again after reboot.
 - If an ACK is received but journal persistence fails, the result is
   `ack_unjournaled`; the command is not immediately retried.
@@ -126,9 +142,8 @@ coordinator. The next hardware gateway should be built from the experiment.
   configured clock.
 - Journal size is configurable and must cover the chosen recovery horizon.
 
-The remaining exactly-once risk is power loss after the H2 performs a command
-but before the S3 records the ACK. The final H2 protocol must therefore make
-`event_id` idempotent on the H2 as well.
+The remaining exactly-once risk is power loss after the relay acts but before
+the hub records the ACK.
 
 ### Persistence
 
@@ -142,35 +157,92 @@ but before the S3 records the ACK. The final H2 protocol must therefore make
   empty collection.
 - `fsync` and filesystem sync are used when exposed by the runtime.
 
-## Supported Scheduling Model
+## Supported scheduling model
 
-Triggers:
+Triggers: fixed local time; a calculated zman; a calculated zman with a minute
+offset.
 
-- Fixed local time.
-- A calculated zman.
-- A calculated zman with a minute offset.
+Recurrences: daily or selected weekdays; Shabbat/Yom Tov and their eve;
+Chol Hamoed and Rosh Chodesh; Hebrew day, Hebrew date, Gregorian annual date,
+or a one-time date.
 
-Recurrences:
+Actions: `on`, `off`, and `toggle`. Scheduled events reject `toggle` — it is
+not deterministic under replay and recovery; manual control may still use it.
 
-- Daily or selected weekdays.
-- Shabbat/Yom Tov and their eve.
-- Chol Hamoed and Rosh Chodesh.
-- Hebrew day, Hebrew date, Gregorian annual date, or one-time date.
+## Known gaps
 
-Actions:
+- **Product B never fires schedules.** `deploy/atoms3/main.py` composes the
+  Executor and the Api but never starts a scheduler tick, so a saved schedule
+  is stored and never executed there. The engine itself is no longer the
+  obstacle — `application/scheduler.py` is in the shared brain and product B
+  imports it already; what is missing is one task on its loop, and hardware to
+  verify it on.
+- **Multi-gang switches share one state.** The coordinator discovers a device's
+  endpoint list and commands honour a per-entity `zigbee_endpoint`, but the
+  gateway keys live state by ieee alone, so two gangs of one switch overwrite
+  each other's reported state.
+- **Electrical measurement was removed** (2026-08-05). It never worked in
+  0.11.x, and 0.12.0 takes it out rather than debugging it further. See
+  `docs/UART_PROTOCOL.md`. Cluster discovery stays — it is what multi-gang
+  needs and has nothing to do with measuring.
+- **No `reconcile` yet.** The rule is decided (self-inflicted drift gets
+  corrected, human intervention is respected until the target's next scheduled
+  transition) but nothing implements it; it needs per-command attribution,
+  which does not exist.
+- **`tset_hakohavim` and `tset_hakohavim_shabbat` compute the same instant.**
+  Both are 8.5° below the horizon, so the panel lists two rows with one time.
+  They are kept as separate keys deliberately: Shabbat exit is the product
+  concept saved schedules point at, so adopting a stricter shiur later is a
+  one-line change every schedule follows. The reference library has no Shabbat
+  exit at all — only one tzais.
+- **Groups and date-based recurrences have no UI** on the panel.
 
-- `on`, `off`, and `toggle`.
+## Verification
 
-Scheduled events reject `toggle`; manual control may still use it.
+```powershell
+python -m pip install -e ".[dev]"   # pytest, ruff, pyserial
+$env:PYTHONPATH = "src"
+python -m pytest -q                 # brain, gateway, scheduler
+python -m ruff check .              # lint; expected to be clean
+```
 
-## Hardware Direction
+Coordinator firmware, pure layers (protocol/txn), on the host:
 
-Current pilot direction:
+```bash
+bash experiments/zigbee_probe/h2_coordinator_firmware/host_test/run.sh
+```
+
+On real hardware, against the real H2 and real relays:
+
+```powershell
+python panel_mp/run_hwtest.py
+```
+
+On real hardware, against the real display — builds each screen on the panel
+and checks it fits 800×480, since anything that does not is drawn off the page
+and lost silently (there is no scrolling to reach it):
+
+```powershell
+python panel_mp/run_hwtest_ui.py
+```
+
+On real hardware, zmanim computed by the device diffed against the committed
+reference table. The panel is a single-precision float build, where an offset
+added to a Julian day can vanish entirely — the host suite cannot see that, so
+this is the only check that covers the device's arithmetic:
+
+```powershell
+python panel_mp/run_hwtest_zmanim.py
+```
+
+All three stop `main.py` for the run and restore it afterwards.
+
+## Hardware direction
 
 ```text
 CrowPanel Advance 7 inch ESP32-S3
-    - UI, application logic, storage, and RTC access
-    - UART connection to ESP32-H2
+    - UI, application logic, storage, RTC (PCF8563), scheduler
+    - UART1 to ESP32-H2 (S3 GPIO5 -> H2 GPIO2, H2 GPIO24 -> S3 GPIO19)
 
 ESP32-H2
     - Zigbee coordinator and device gateway
@@ -179,7 +251,7 @@ Local Zigbee mesh
     - Wall switches, shutter controllers, and suitable DIN modules
 ```
 
-Likely pilot devices include Sonoff Zigbee MINI modules and selected DIN-rail
+Pilot devices are Sonoff Zigbee MINI modules and selected DIN-rail
 controllers. Devices with a neutral wire commonly act as mesh routers, while
 no-neutral devices commonly do not. Exact compatibility, electrical ratings,
 router behavior, and certifications must be verified against the purchased
@@ -189,32 +261,3 @@ All mains-voltage installation and load selection must be performed or approved
 by a qualified electrician. Local files under `data-sheets/` are engineering
 references, not a substitute for current vendor documentation or electrical
 approval.
-
-## Verification
-
-Run locally in PowerShell:
-
-```powershell
-$env:PYTHONPATH = "src"
-python -m unittest discover -v
-python -m compileall -q src tests
-```
-
-When `setuptools` is available, the package can also be installed locally:
-
-```powershell
-python -m pip install -e .
-```
-
-## Next Steps
-
-1. In `experiments/zigbee_probe`, replace the single `s_peer_short` with a
-   small device table.
-2. Persist and restore the device table so reset does not lose discovered
-   devices.
-3. Update the S3 probe to command a selected `short_addr` explicitly.
-4. Verify two joined devices independently on hardware.
-5. Promote the proven protocol into a new product hardware gateway.
-6. Add H2-side idempotency using product `event_id`.
-7. Revisit the web endpoint model once hardware discovery reports stable device
-   identifiers.

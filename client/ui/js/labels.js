@@ -16,7 +16,6 @@ export const ZMAN_LABELS = {
   shkia:                      'שקיעה',
   tset_hakohavim:             'צאת הכוכבים',
   tset_hakohavim_shabbat:     'צאת הכוכבים (שבת)',
-  tset_hakohavim_tsom:        'צאת הכוכבים (תענית)',
   tset_hakohavim_rabeinu_tam: 'צאת הכוכבים (ר"ת)',
   chatzot_halayla:            'חצות הלילה',
   candle_lighting:            'הדלקת נרות',
