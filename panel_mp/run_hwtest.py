@@ -15,27 +15,14 @@ import os
 import subprocess
 import sys
 
+from run_common import find_panel, mpremote
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # The bench rig: the older relay drives the newer one's switch input, so
 # commanding it stands in for a person at the wall switch.
 DEFAULT_ACTUATOR = "a4:c1:38:6b:47:9d:c2:55"
 DEFAULT_DUT = "f0:44:d3:ff:fe:6e:d6:e2"
-
-CH340_VID_PID = (0x1A86, 0x7522)
-
-
-def find_panel():
-    from serial.tools import list_ports
-    for port in sorted(list_ports.comports(), key=lambda p: p.device):
-        if (port.vid, port.pid) == CH340_VID_PID:
-            return port.device
-    return None
-
-
-def mpremote(port, *args):
-    return subprocess.call(
-        [sys.executable, "-m", "mpremote", "connect", port] + list(args))
 
 
 def main():

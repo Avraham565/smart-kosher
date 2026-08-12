@@ -8,6 +8,15 @@ from .schedules import validate_schedule
 CONFIG_ENTITY_TYPES = ("zones", "endpoints", "groups", "schedules")
 ALL_ENTITY_TYPES = CONFIG_ENTITY_TYPES + ("journal",)
 
+# A schedule or a manual command names a single target ("endpoint"); storage
+# names the collection it lives in ("endpoints"). Spelled out rather than
+# derived by adding an "s", because the day a target type does not pluralise
+# that way the derivation would fail silently and the lookup would miss.
+TARGET_COLLECTIONS = {
+    "endpoint": "endpoints",
+    "group": "groups",
+}
+
 
 def validate_entity(entity_type, entity):
     if entity_type not in ALL_ENTITY_TYPES:

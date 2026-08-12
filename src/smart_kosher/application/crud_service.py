@@ -3,8 +3,9 @@
 import binascii
 import os
 
-ENTITY_TYPES = ("zones", "endpoints", "groups", "schedules")
-
+# The entity list itself lives in domain.entities.CONFIG_ENTITY_TYPES. This
+# module used to keep an ENTITY_TYPES tuple of its own that nothing ever read
+# -- one of five copies of the same four strings.
 _PREFIXES = {
     "zones": "z",
     "endpoints": "ep",

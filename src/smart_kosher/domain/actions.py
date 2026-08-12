@@ -1,6 +1,6 @@
 """Device-independent actions."""
 
-from ._values import clone_json, optional_dict, require_non_empty_string, validate_json
+from ._values import optional_dict, require_non_empty_string, validate_json
 
 ACTION_TYPES = ("on", "off", "toggle")
 
@@ -19,16 +19,3 @@ def validate_action(action_type, action_data=None):
     except ValueError as exc:
         raise ActionValidationError(str(exc))
     return True
-
-
-class Action:
-    def __init__(self, action_type, data=None):
-        validate_action(action_type, data)
-        self.action_type = action_type
-        self.data = clone_json(data or {})
-
-    def to_dict(self):
-        return {
-            "action_type": self.action_type,
-            "action_data": clone_json(self.data),
-        }

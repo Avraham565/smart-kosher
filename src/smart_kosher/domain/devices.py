@@ -1,6 +1,6 @@
 """JSON-native schemas for zones, endpoints, and groups."""
 
-from ._values import clone_json, is_integer, require_non_empty_string, validate_json
+from ._values import is_integer, require_non_empty_string, validate_json
 from .actions import ACTION_TYPES
 
 
@@ -63,32 +63,3 @@ def validate_group(group):
     except ValueError as exc:
         raise DeviceValidationError(str(exc))
     return True
-
-
-class _DeviceModel:
-    @staticmethod
-    def validator(value):
-        raise NotImplementedError("subclass must define validator")
-
-    def __init__(self, value):
-        self.validator(value)
-        self._value = clone_json(value)
-
-    @property
-    def id(self):
-        return self._value["id"]
-
-    def to_dict(self):
-        return clone_json(self._value)
-
-
-class Zone(_DeviceModel):
-    validator = staticmethod(validate_zone)
-
-
-class Endpoint(_DeviceModel):
-    validator = staticmethod(validate_endpoint)
-
-
-class Group(_DeviceModel):
-    validator = staticmethod(validate_group)

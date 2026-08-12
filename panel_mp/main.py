@@ -28,8 +28,10 @@ import lvgl_loop
 import store
 import theme
 import toast
+import uart_tap
 import ui_home
 from smart_kosher.application import scheduler
+from smart_kosher.ports.clock import MIN_VALID_YEAR
 
 _STATUS_PERIOD_S = 5
 _CLOCK_PERIOD_S = 10
@@ -93,7 +95,7 @@ async def _clock_refresh(api):
     while True:
         try:
             now = time.localtime()
-            if now[0] < 2013:
+            if now[0] < MIN_VALID_YEAR:
                 store.now.set(None)
                 store.today.set(None)
             else:
@@ -193,6 +195,9 @@ def main():
     theme.load_fonts()
     repo = JsonRepository(brain.DATA_DIR)
     gateway, uart = _make_zigbee(repo)
+    # Opt-in wire log for bench diagnosis: create /data/uart_tap to have every
+    # H2 frame printed to the console, delete it to go quiet. See uart_tap.py.
+    uart_tap.maybe_install(gateway, brain.DATA_DIR + "/uart_tap")
 
     # Battery-backed RTC (PCF8563 @0x51 on the display I2C bus): restore the
     # system clock from it at boot so a set time survives power-off, and let the

@@ -25,6 +25,7 @@ import keyboard
 import shell
 import store
 import theme
+from smart_kosher.ports.clock import MAX_VALID_YEAR, MIN_VALID_YEAR
 from widgets import w_card_button, w_group, w_label
 
 # (key, label, width, min, max) -- entry order, shown as chips.
@@ -33,7 +34,7 @@ _FIELDS = (
     ("minute", "דקה", 2, 0, 59),
     ("day", "יום", 2, 1, 31),
     ("month", "חודש", 2, 1, 12),
-    ("year", "שנה", 4, 2013, 2099),
+    ("year", "שנה", 4, MIN_VALID_YEAR, MAX_VALID_YEAR),
 )
 _DEFAULTS = {"hour": "12", "minute": "00", "day": "01",
              "month": "01", "year": "2026"}

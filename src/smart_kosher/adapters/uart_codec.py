@@ -6,7 +6,7 @@ import json as _json
 _LOWER_HEX = "0123456789abcdef"
 
 
-def encode(msg: dict) -> bytes:
+def encode(msg):
     """Serialize msg to a UART line.  Key order follows insertion order of msg.
 
     The CRC covers the sender's own serialization, so the exact separator
@@ -20,10 +20,10 @@ def encode(msg: dict) -> bytes:
     except TypeError:  # MicroPython
         body = _json.dumps(msg)
     crc = binascii.crc32(body.encode("utf-8")) & 0xFFFFFFFF
-    return f"{crc:08x} {body}\n".encode("utf-8")
+    return "{:08x} {}\n".format(crc, body).encode("utf-8")
 
 
-def decode(line: str) -> dict:
+def decode(line):
     """Parse and CRC-validate one UART line.  Raises ValueError on mismatch."""
     if isinstance(line, (bytes, bytearray)):
         line = line.decode("utf-8")
@@ -33,9 +33,9 @@ def decode(line: str) -> dict:
         raise ValueError("bad_crc: missing space delimiter")
     crc_hex, body = parts
     if len(crc_hex) != 8 or any(ch not in _LOWER_HEX for ch in crc_hex):
-        raise ValueError(f"bad_crc: non-hex prefix {crc_hex!r}")
+        raise ValueError("bad_crc: non-hex prefix {!r}".format(crc_hex))
     expected = int(crc_hex, 16)
     actual = binascii.crc32(body.encode("utf-8")) & 0xFFFFFFFF
     if expected != actual:
-        raise ValueError(f"bad_crc: expected {crc_hex} got {actual:08x}")
+        raise ValueError("bad_crc: expected {} got {:08x}".format(crc_hex, actual))
     return _json.loads(body)

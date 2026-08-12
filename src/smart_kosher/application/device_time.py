@@ -6,11 +6,12 @@ offset — a client that sends local time here shifts every computed zman.
 """
 
 from ..domain._values import is_integer
+from ..ports.clock import MAX_VALID_YEAR, MIN_VALID_YEAR
 from ..zmanim import gregorian_day_number
 
 _FIELDS = ("year", "month", "day", "hour", "minute", "second")
 _RANGES = {"hour": (0, 23), "minute": (0, 59), "second": (0, 59),
-           "year": (2013, 2099)}
+           "year": (MIN_VALID_YEAR, MAX_VALID_YEAR)}
 
 
 class ClockUnsupportedError(Exception):

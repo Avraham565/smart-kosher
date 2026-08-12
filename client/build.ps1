@@ -11,10 +11,14 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) { $python = "python" }
 
+# --paths src: bridge.py imports smart_kosher.web.route_table, the shared
+# table the hub registers its own HTTP routes from. Without this the exe
+# builds and then fails on the first request.
 & $python -m PyInstaller `
     --noconfirm --onefile --windowed `
     --name SmartKosher `
     --add-data "$PSScriptRoot\ui;ui" `
+    --paths "$repoRoot\src" `
     --collect-all webview `
     --distpath "$PSScriptRoot\dist" `
     --workpath "$PSScriptRoot\build" `

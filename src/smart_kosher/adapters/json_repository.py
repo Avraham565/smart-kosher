@@ -13,6 +13,10 @@ from ..domain.events import validate_event
 from ..domain.schedules import retired_zman_key
 from ..ports.journal import EventJournal
 from ..ports.repository import Repository
+from ._atomic_io import exists as _exists
+from ._atomic_io import flush_file as _flush_file
+from ._atomic_io import replace as _replace
+from ._atomic_io import sync_filesystem as _sync_filesystem
 
 
 class RepositoryError(Exception):
@@ -25,46 +29,6 @@ class RepositoryValidationError(RepositoryError):
 
 class RepositoryCorruptionError(RepositoryError):
     pass
-
-
-def _exists(path):
-    try:
-        os.stat(path)
-        return True
-    except OSError:
-        return False
-
-
-def _replace(source, destination):
-    replace = getattr(os, "replace", None)
-    if replace is not None:
-        replace(source, destination)
-        return
-    if _exists(destination):
-        os.remove(destination)
-    os.rename(source, destination)
-
-
-def _flush_file(handle):
-    flush = getattr(handle, "flush", None)
-    if flush is not None:
-        flush()
-
-    fsync = getattr(os, "fsync", None)
-    fileno = getattr(handle, "fileno", None)
-    if fsync is None or fileno is None:
-        return
-    try:
-        descriptor = fileno()
-    except (AttributeError, OSError):
-        return
-    fsync(descriptor)
-
-
-def _sync_filesystem():
-    sync = getattr(os, "sync", None)
-    if sync is not None:
-        sync()
 
 
 class JsonRepository(Repository):

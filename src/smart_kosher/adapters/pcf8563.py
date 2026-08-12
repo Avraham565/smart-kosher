@@ -16,7 +16,7 @@ lost), 0x03 minutes, 0x04 hours, 0x05 days, 0x06 weekdays, 0x07 century_months
 importable on CPython.
 """
 
-from ..ports.clock import SettableClock
+from ..ports.clock import MIN_VALID_YEAR, SettableClock
 
 _ADDR = 0x51
 _SECONDS_REG = 0x02
@@ -78,9 +78,9 @@ class PCF8563(SettableClock):
     def sync_to_system(self):
         """Copy the chip's time into ``machine.RTC`` at boot so ``time.localtime``
         is correct immediately. No-op (returns False) when the chip has no real
-        time yet (year < 2013 == never set / factory default)."""
+        time yet (year < MIN_VALID_YEAR == never set / factory default)."""
         full = self.read()
-        if full is None or full[0] < 2013:
+        if full is None or full[0] < MIN_VALID_YEAR:
             return False
         self._set_system(*full)
         return True

@@ -1,4 +1,4 @@
-"""Tests for UartProtocolCodec — CRC32 envelope (UART_PROTOCOL.md §Envelope)."""
+"""Tests for uart_codec — CRC32 envelope (UART_PROTOCOL.md §Envelope)."""
 
 import unittest
 

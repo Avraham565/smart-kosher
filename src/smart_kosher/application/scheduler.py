@@ -35,6 +35,7 @@
 
 import asyncio
 
+from ..ports.clock import MIN_VALID_YEAR
 from ..zmanim import gregorian_from_day_number
 from .planner import Planner
 from .recovery import RecoveryService
@@ -50,10 +51,6 @@ TICK_SECONDS = 30
 # panel's journal keeps only its last 128 records (brain._JOURNAL_MAX_RECORDS),
 # and dedup is only trustworthy inside that history.
 CATCH_UP_MINUTES = 120
-
-# machine.RTC reads year 2000 before it is ever set; the brain uses the same
-# threshold to report clock_unset (main.py mirrors it for the clock face).
-MIN_VALID_YEAR = 2013
 
 # The first tick is the expensive one: the planner spans +/-3 days around the
 # window, so it computes a week of zmanim before its day-cache is warm (later

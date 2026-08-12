@@ -1,8 +1,10 @@
 """Port used by the executor to deliver device commands."""
 
 # Gateway adapters normalize transport-specific replies into these statuses.
-# The current hardware experiment returns simpler ACKs such as status="ok";
-# a production adapter should map those replies into this internal contract.
+# ZigbeeGateway._ack_status does exactly that for the H2/NanoC6 coordinator:
+# the wire's own ACK ladder (docs/UART_PROTOCOL.md) maps onto these names, and
+# a coordinator too old to distinguish delivered from accepted keeps the older,
+# looser meaning of status="ok" -> sent_to_zigbee.
 DELIVERY_SUCCESS_STATUSES = frozenset(
     {"accepted_by_h2", "sent_to_zigbee", "confirmed_by_device", "observed_state"}
 )

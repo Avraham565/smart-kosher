@@ -1,7 +1,7 @@
 """Schedule model and business validation rules."""
 
 from ..zmanim import gregorian_day_number
-from ._values import clone_json, is_integer, require_non_empty_string, validate_json
+from ._values import is_integer, require_non_empty_string, validate_json
 from .actions import validate_action
 
 ZMAN_KEYS = {
@@ -144,16 +144,3 @@ def validate_schedule(schedule):
     except ValueError as exc:
         raise ScheduleValidationError(str(exc))
     return True
-
-
-class Schedule:
-    def __init__(self, value):
-        validate_schedule(value)
-        self._value = clone_json(value)
-
-    @property
-    def id(self):
-        return self._value["id"]
-
-    def to_dict(self):
-        return clone_json(self._value)

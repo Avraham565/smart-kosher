@@ -4,15 +4,14 @@ import binascii
 import os
 import time
 
+from ..domain.actions import ACTION_TYPES
+from ..domain.entities import TARGET_COLLECTIONS
 from ..zmanim import gregorian_day_number
 from .crud_service import NotFoundError
 
-_TARGET_TO_COLLECTION = {
-    "endpoint": "endpoints",
-    "group": "groups",
-}
-
-_VALID_ACTIONS = ("on", "off", "toggle")
+# Both vocabularies come from the domain. This module used to restate them --
+# its own ("on","off","toggle") tuple and its own target->collection map -- so
+# a fourth action would have been accepted by the domain and rejected here.
 
 
 class ControlService:
@@ -30,11 +29,11 @@ class ControlService:
         ack echo. Result gains a ``confirmation`` dict when requested and
         the gateway supports it (the simulator does not).
         """
-        if target_type not in _TARGET_TO_COLLECTION:
+        if target_type not in TARGET_COLLECTIONS:
             raise ValueError("unsupported target_type: {}".format(target_type))
-        if action_type not in _VALID_ACTIONS:
+        if action_type not in ACTION_TYPES:
             raise ValueError("unsupported action_type: {}".format(action_type))
-        collection = _TARGET_TO_COLLECTION[target_type]
+        collection = TARGET_COLLECTIONS[target_type]
         entity = self._repo.get_by_id(collection, target_id)
         if entity is None:
             raise NotFoundError(target_id)

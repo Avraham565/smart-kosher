@@ -17,10 +17,16 @@ resolved via sys._MEIPASS.
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_SRC = os.path.join(os.path.dirname(_HERE), "src")
+# The bridge resolves REST paths against the hub's own route table
+# (smart_kosher.web.route_table), so the core package has to be importable.
+# Frozen, PyInstaller has already bundled it as modules; from a checkout it
+# lives in ../src, which nothing else here puts on the path.
+sys.path[:0] = [_HERE] if getattr(sys, "frozen", False) else [_HERE, _SRC]
 
-from bridge import LinkError
-from server import Manager, serve
+from bridge import LinkError  # noqa: E402  (needs the path setup above)
+from server import Manager, serve  # noqa: E402
 
 
 def _ui_dir():

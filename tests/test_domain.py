@@ -2,18 +2,29 @@ import unittest
 
 from smart_kosher.domain.actions import validate_action
 from smart_kosher.domain.devices import (
-    Endpoint,
-    Group,
-    Zone,
     validate_endpoint,
     validate_group,
     validate_zone,
 )
 from smart_kosher.domain.events import Event, validate_event
-from smart_kosher.domain.schedules import Schedule, validate_schedule
+from smart_kosher.domain.schedules import validate_schedule
 
 
 class DomainTests(unittest.TestCase):
+    def test_target_collections_agree_with_both_vocabularies(self):
+        # The map is the join between two lists that live in different modules;
+        # a target type added to one and forgotten in the other would make
+        # manual control reject a target the domain accepts.
+        from smart_kosher.domain.entities import (
+            CONFIG_ENTITY_TYPES,
+            TARGET_COLLECTIONS,
+        )
+        from smart_kosher.domain.schedules import TARGET_TYPES
+        self.assertEqual(set(TARGET_TYPES), set(TARGET_COLLECTIONS))
+        for collection in TARGET_COLLECTIONS.values():
+            with self.subTest(collection=collection):
+                self.assertIn(collection, CONFIG_ENTITY_TYPES)
+
     def test_actions_accept_only_supported_types(self):
         for action_type in ("on", "off", "toggle"):
             self.assertTrue(validate_action(action_type))
@@ -38,18 +49,8 @@ class DomainTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_group({"id": "g", "member_ids": ["x", "x"]})
 
-    def test_device_models_return_defensive_copies(self):
-        for model in (
-            Zone({"id": "kitchen", "name": "Kitchen"}),
-            Endpoint({"id": "light", "name": "Main light", "capabilities": ["on", "off"]}),
-            Group({"id": "lights", "name": "All lights", "member_ids": ["light"]}),
-        ):
-            copied = model.to_dict()
-            copied["id"] = "changed"
-            self.assertNotEqual("changed", model.id)
-
-    def test_schedule_model_returns_defensive_copy(self):
-        value = {
+    def test_a_fully_populated_schedule_validates(self):
+        self.assertTrue(validate_schedule({
             "id": "schedule-1",
             "target_type": "group",
             "target_id": "all",
@@ -59,12 +60,22 @@ class DomainTests(unittest.TestCase):
             "trigger_data": {"h": 12, "m": 0},
             "recurrence_type": "daily",
             "recurrence_data": {},
-        }
-        model = Schedule(value)
-        copied = model.to_dict()
-        copied["trigger_data"]["h"] = 1
-        self.assertEqual(12, model.to_dict()["trigger_data"]["h"])
-        self.assertTrue(validate_schedule(value))
+        }))
+
+    def test_validation_does_not_mutate_what_it_is_given(self):
+        # Entities travel as plain dicts, so the validators are the only thing
+        # standing between a caller's object and a surprise edit.
+        zone = {"id": "kitchen", "name": "Kitchen"}
+        endpoint = {"id": "light", "name": "Main light",
+                    "capabilities": ["on", "off"]}
+        group = {"id": "lights", "name": "All lights", "member_ids": ["light"]}
+        for entity, validator in ((zone, validate_zone),
+                                  (endpoint, validate_endpoint),
+                                  (group, validate_group)):
+            with self.subTest(entity=entity["id"]):
+                before = repr(entity)
+                self.assertTrue(validator(entity))
+                self.assertEqual(before, repr(entity))
 
     def test_schedule_rejects_toggle_action(self):
         base = {

@@ -12,14 +12,15 @@ import time
 
 from ..data import load_cities, resolve_city
 from ..domain.devices import DeviceValidationError
+from ..domain.entities import CONFIG_ENTITY_TYPES
 from ..domain.schedules import ScheduleValidationError
+from ..ports.clock import MIN_VALID_YEAR
 from ..zmanim import CANDLE_OFFSET_MINUTES
 from .crud_service import InUseError, NotFoundError
 from .device_time import ClockUnsupportedError
 
 APP_VERSION = "0.1.0"
 
-_CRUD_ENTITIES = ("zones", "endpoints", "groups", "schedules")
 _MAX_PREVIEW_DAYS = 7
 
 # Error kinds — each transport maps these to its own status codes
@@ -178,7 +179,7 @@ class Api:
         self._started = time.time()
 
         ops = {}
-        for entity in _CRUD_ENTITIES:
+        for entity in CONFIG_ENTITY_TYPES:
             self._register_crud(ops, entity)
         ops["schedules.set_enabled"] = self._set_schedule_enabled
         ops["schedules.upcoming"] = self._upcoming
@@ -396,7 +397,7 @@ class Api:
             "settings_load_error": getattr(self._settings, "load_error", None),
             "memory": _memory_info(),
             # A fresh MicroPython boot reads 2000-01-01 until the RTC is set.
-            "clock_unset": now[0] < 2013,
+            "clock_unset": now[0] < MIN_VALID_YEAR,
         }
         if self._status_info is not None:
             try:

@@ -22,19 +22,11 @@ import urllib.request
 import serial
 from serial.tools import list_ports
 
+from smart_kosher.web.route_table import HTTP_STATUS, resolve
+
 # ESP32-S3 USB-Serial/JTAG in MicroPython mode (bootloader mode is 1001).
 DEVICE_VID = 0x303A
 DEVICE_PID = 0x4001
-
-_KIND_TO_STATUS = {
-    "bad_request": 400,
-    "not_found": 404,
-    "conflict": 409,
-    "unsupported": 501,
-    "internal": 500,
-}
-
-_CRUD_ENTITIES = ("zones", "endpoints", "groups", "schedules")
 
 
 class LinkError(Exception):
@@ -60,60 +52,18 @@ def find_device_ports():
 def rest_to_op(method, path, query, body):
     """Translate a REST request to ``(op, params, created)`` or None.
 
-    Mirrors the hub's own HTTP adapter (web/routes/__init__.py) so the
-    serial transport behaves identically to the network one.
+    Resolved against ``smart_kosher.web.route_table`` -- the same table the
+    hub registers its own HTTP routes from. This used to be a hand-written
+    copy of that mapping, which meant a route added on one side and forgotten
+    on the other worked over WiFi and 404'd over USB with nothing to catch it.
     """
-    parts = [p for p in path.split("/") if p]
-    if not parts or parts[0] != "api":
+    route, path_vars = resolve(method, path)
+    if route is None:
         return None
-    parts = parts[1:]
-
-    if parts == ["schedules", "upcoming"] and method == "GET":
-        raw = (query.get("days") or ["3"])[0]
-        try:
-            days = int(raw)
-        except ValueError:
-            days = raw  # let the hub reject it with its own message
-        return "schedules.upcoming", {"days": days}, False
-    if (len(parts) == 3 and parts[0] == "schedules" and parts[2] == "enabled"
-            and method == "PATCH"):
-        return ("schedules.set_enabled",
-                {"id": parts[1], "enabled": (body or {}).get("enabled")}, False)
-    if parts == ["control"] and method == "POST":
-        return "control.send", body or {}, False
-    if parts == ["zigbee", "devices"] and method == "GET":
-        return "zigbee.devices", {}, False
-    if parts == ["zigbee", "permit_join"] and method == "POST":
-        return "zigbee.permit_join", body or {}, False
-    if parts == ["settings"]:
-        if method == "GET":
-            return "settings.get", {}, False
-        if method == "PUT":
-            return "settings.update", {"data": body or {}}, False
-    if parts == ["settings", "cities"] and method == "GET":
-        return "settings.cities", {}, False
-    if parts == ["status"] and method == "GET":
-        return "status.get", {}, False
-    if parts == ["today"] and method == "GET":
-        date = (query.get("date") or [None])[0]
-        return "today.get", {"date": date}, False
-    if parts == ["time"] and method == "POST":
-        return "time.set", body or {}, False
-
-    if parts and parts[0] in _CRUD_ENTITIES:
-        entity = parts[0]
-        if len(parts) == 1:
-            if method == "GET":
-                return entity + ".list", {}, False
-            if method == "POST":
-                return entity + ".create", {"data": body or {}}, True
-        elif len(parts) == 2:
-            if method == "PUT":
-                return (entity + ".update",
-                        {"id": parts[1], "data": body or {}}, False)
-            if method == "DELETE":
-                return entity + ".delete", {"id": parts[1]}, False
-    return None
+    # parse_qs gives a list per key; the table works in single values, which
+    # is what every route here wants.
+    flat_query = {key: values[0] for key, values in query.items() if values}
+    return route.op, route.params(path_vars, flat_query, body), route.created
 
 
 class SerialLink:
@@ -197,7 +147,7 @@ class SerialLink:
         if response.get("ok"):
             return (201 if created else 200), {"ok": True,
                                                "data": response.get("data")}
-        status = _KIND_TO_STATUS.get(response.get("kind"), 500)
+        status = HTTP_STATUS.get(response.get("kind"), 500)
         return status, {"ok": False, "error": response.get("error", "error")}
 
 

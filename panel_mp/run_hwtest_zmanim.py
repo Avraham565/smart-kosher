@@ -14,11 +14,11 @@ import os
 import subprocess
 import sys
 
+from run_common import find_panel, mpremote
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 GOLDEN = os.path.join(ROOT, "tests", "data", "zmanim_golden.csv.gz")
-
-CH340_VID_PID = (0x1A86, 0x7522)
 
 # Our key -> reference column, same mapping the host suite uses.
 COLUMNS = ("alos_16_1", "misheyakir_11_5", "sunrise_elev",
@@ -29,22 +29,6 @@ COLUMNS = ("alos_16_1", "misheyakir_11_5", "sunrise_elev",
            "tzais_8_5", "tzais_8_5", "tzais_72", "solar_midnight", "candle_18")
 
 TOLERANCE_SECONDS = 2.0
-
-
-def find_panel():
-    from serial.tools import list_ports
-    for port in sorted(list_ports.comports(), key=lambda p: p.device):
-        if (port.vid, port.pid) == CH340_VID_PID:
-            return port.device
-    return None
-
-
-def mpremote(port, *args, **kwargs):
-    cmd = [sys.executable, "-m", "mpremote", "connect", port] + list(args)
-    if kwargs.get("capture"):
-        return subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
-    return subprocess.call(cmd)
 
 
 def main():

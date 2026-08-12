@@ -7,7 +7,3 @@ def ok(data=None, status=200):
 
 def err(message, status=400):
     return {"ok": False, "error": message}, status
-
-
-def not_found(message="not found"):
-    return err(message, 404)

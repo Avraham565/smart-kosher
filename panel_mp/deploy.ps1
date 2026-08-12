@@ -41,7 +41,9 @@ $modules = "theme.py", "widgets.py", "reactive.py", "store.py", "hebdate.py",
            "zone_picker.py", "rooms_page.py", "room_page.py", "device_page.py",
            "sched_labels.py", "sched_describe.py", "schedules_page.py",
            "schedule_add.py", "display.py", "ui_home.py", "lvgl_loop.py",
-           "bridge.py", "brain.py"
+           "bridge.py", "brain.py", "uart_tap.py"
+# uart_tap.py is imported unconditionally by main.py (it decides whether to
+# install itself), so leaving it out of this list bricks the boot.
 # scheduler.py is NOT here any more: it moved into the brain package
 # (smart_kosher/application/scheduler.py) and ships with the /lib copy below.
 foreach ($m in $modules) {
