@@ -13,6 +13,12 @@ it has been tested on real devices.
 > hardware-proven protocol in July, which `## Production Gateway (2026-07-09)`
 > records. Each superseded section is now marked. For the current protocol read
 > `docs/UART_PROTOCOL.md`; for the current firmware plan, `docs/h2_production_plan.md`.
+>
+> **Path note, 2026-08-12.** `experiments/` no longer exists. The coordinator
+> firmware this file calls `experiments/zigbee_probe/h2_coordinator_firmware/`
+> is now `firmware/h2_coordinator/`, and the MicroPython probes beside it are
+> now `tools/zigbee_probe/`. The old paths are left in place below because this
+> is a dated log, not a description of the present.
 
 ## Hardware-Proven Source
 

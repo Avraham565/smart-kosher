@@ -12,8 +12,8 @@ if ([string]::IsNullOrWhiteSpace($FlashOut)) {
 
 $ErrorActionPreference = "Stop"
 
-$experimentRoot = Split-Path -Parent $PSScriptRoot
-$sourceRoot     = Join-Path $experimentRoot "h2_coordinator_firmware"
+$firmwareRoot = Split-Path -Parent $PSScriptRoot
+$sourceRoot   = Join-Path $firmwareRoot "h2_coordinator"
 
 function Convert-ToWslPath([string]$Path) {
     $full  = [System.IO.Path]::GetFullPath($Path)

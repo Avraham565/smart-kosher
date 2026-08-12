@@ -107,7 +107,7 @@ ruff check .                                      # חייב לעבור נקי
 python dev_server.py                              # API על localhost:5004
 ```
 
-`experiments/` מוחרג מ-lint בכוונה — הוא מכיל סקריפטי חקירה בלבד.
-`experiments/zigbee_probe/h2_coordinator_firmware/` היא **קושחת הייצור החיה**
-של הרכזת, למרות מיקומה. `experiments/_archive/` רוקן (2026-08-12) ונשאר בו
-README אחד שמתעד את שושלת קוד התצוגה ואת נתיבי השחזור מ-git.
+`tools/zigbee_probe/` מוחרג מ-lint בכוונה — הוא מכיל סקריפטי חקירה בלבד.
+`firmware/h2_coordinator/` היא **קושחת הייצור החיה** של הרכזת, ונבנית דרך
+`firmware/tools/build_h2_coordinator.ps1`. `experiments/` חוסל (2026-08-12);
+שושלת קוד התצוגה ונתיבי השחזור מ-git עברו ל-`docs/display-lineage.md`.

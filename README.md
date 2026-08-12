@@ -33,13 +33,14 @@ panel_mp/                 PRODUCT A firmware: LVGL UI + brain + scheduler
 deploy/atoms3/            PRODUCT B firmware (paused)
 client/                   Windows desktop client for product B (paused)
 
-experiments/zigbee_probe/
-  h2_coordinator_firmware/  ESP32-H2 / NanoC6 Zigbee coordinator (C, ESP-IDF)
-  tools/                    build, flash, and probe scripts
+firmware/
+  h2_coordinator/         ESP32-H2 / NanoC6 Zigbee coordinator (C, ESP-IDF)
+  tools/                  build and flash scripts for it
 
 tests/                    unit tests for the brain, gateway and scheduler
   data/                   committed reference values (zmanim golden table)
 tools/zmanim_golden/      regenerates that table from KosherJava (needs a JDK)
+tools/zigbee_probe/       exploratory MicroPython probes (not shipped)
 docs/                     protocol, hardware audit, H2 production plan
 data-sheets/              local device notes and vendor references
 ```
@@ -209,7 +210,7 @@ python -m ruff check .              # lint; expected to be clean
 Coordinator firmware, pure layers (protocol/txn), on the host:
 
 ```bash
-bash experiments/zigbee_probe/h2_coordinator_firmware/host_test/run.sh
+bash firmware/h2_coordinator/host_test/run.sh
 ```
 
 On real hardware, against the real H2 and real relays:

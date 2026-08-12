@@ -34,10 +34,14 @@ tests/.tmp-*/
 lvgl_micropython/
 
 # Hardware and firmware build artifacts
-h2_firmware/build/
-h2_firmware/sdkconfig
-h2_firmware/sdkconfig.old
-h2_firmware/-
+firmware/h2_coordinator/build/
+firmware/h2_coordinator/sdkconfig
+firmware/h2_coordinator/managed_components/
+# dependencies.lock is deliberately NOT ignored: it records the exact
+# esp-zigbee-lib build the firmware was verified against on hardware. It was
+# ignored before, and since the build script builds in a throwaway C:\tmp copy,
+# the lock never survived a build -- so every build re-resolved its dependencies
+# from scratch.
 h2_factory_backup.bin
 *.elf
 *.map

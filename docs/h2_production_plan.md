@@ -2,7 +2,7 @@
 
 Date opened: 2026-08-03
 
-Scope: `experiments/zigbee_probe/h2_coordinator_firmware` (the coordinator
+Scope: `firmware/h2_coordinator` (the coordinator
 firmware) and the two things that consume it — `zigbee_gateway.py` and the
 panel's reader task.
 

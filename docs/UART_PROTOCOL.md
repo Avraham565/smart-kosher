@@ -5,7 +5,7 @@ Zigbee coordinator (ESP32-H2, or NanoC6 in product B).
 
 Implemented by `src/smart_kosher/adapters/uart_codec.py` and
 `zigbee_gateway.py` on the hub side, and by
-`experiments/zigbee_probe/h2_coordinator_firmware/main/{protocol,link,zb}.c`
+`firmware/h2_coordinator/main/{protocol,link,zb}.c`
 on the coordinator side.
 
 Wiring, per target: H2 (CrowPanel slot) S3 GPIO5 → H2 GPIO2, H2 GPIO24 →
