@@ -37,6 +37,14 @@ _STATUS_PERIOD_S = 5
 _CLOCK_PERIOD_S = 10
 _DEVICES_PERIOD_S = 3
 
+# The boot sentinel, printed once the loop is up. host/clean_board.py resets the
+# board and greps the boot output for exactly this string, to tell "main.py is
+# gone" from "main.py ran again, and the RGB DMA is live" -- and a file copy onto
+# a board with live DMA corrupts the VFS. Nothing links the two files: this one
+# only ever runs on the device, that one only on the host, so neither can import
+# the other. tests/test_boot_sentinel_is_in_sync.py pins them together.
+BOOT_SENTINEL = "panel up"
+
 # Link to the H2 coordinator, proven on this exact board in
 # tools/zigbee_probe/s3_ui_probe.py: UART1 TX=GPIO5 RX=GPIO19 @115200, no
 # conflict with the RGB display pins. Driven event-driven here (StreamReader),
@@ -182,7 +190,7 @@ async def _run(composed, gateway, uart):
     # boot catch-up, so a schedule missed while the panel was powered off still
     # fires (bounded look-back + journal dedup -- see scheduler.py).
     sched = asyncio.create_task(scheduler.Scheduler.for_brain(composed).run())
-    print("panel_mp up — LVGL", lv.version_major(), lv.version_minor(),
+    print(BOOT_SENTINEL, "— LVGL", lv.version_major(), lv.version_minor(),
           "@", display.PCLK_HZ // 1_000_000,
           "MHz; brain in-process; H2 on UART", _ZIGBEE_UART_ID,
           "; scheduler every", scheduler.TICK_SECONDS, "s")
