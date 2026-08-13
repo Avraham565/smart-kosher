@@ -5,7 +5,7 @@ usable without the display's DMA racing the transfer, restore main.py after --
 but this suite brings the display up itself, because what it tests is the
 screen.
 
-    python panel_mp/run_hwtest_ui.py
+    python products/panel/host/run_hwtest_ui.py
 """
 
 import argparse
@@ -16,10 +16,16 @@ import sys
 from run_common import find_panel, mpremote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# host/ -> panel/ -> products/ -> repo root.
+ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+DEVICE = os.path.join(HERE, os.pardir, "device")
+HWTEST = os.path.join(HERE, os.pardir, "hwtest")
 
 # Uploaded before the run. city_picker is the component under test; the others
-# are what it imports and may have changed alongside it.
-PAYLOAD = ("hwtest_ui.py", "city_picker.py", "settime.py", "zmanim_page.py",
+# are what it imports and may have changed alongside it. The suite itself comes
+# from hwtest/; everything it exercises comes from device/.
+SUITE = "hwtest_ui.py"
+PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
            "keyboard.py", "widgets.py", "theme.py", "display.py", "shell.py",
            "bridge.py", "store.py", "hebdate.py", "reactive.py")
 
@@ -44,20 +50,22 @@ def main():
         return 1
 
     print("== uploading ==")
+    if mpremote(port, "cp", os.path.join(HWTEST, SUITE), ":" + SUITE) != 0:
+        return 1
     for name in PAYLOAD:
-        if mpremote(port, "cp", os.path.join(HERE, name), ":" + name) != 0:
+        if mpremote(port, "cp", os.path.join(DEVICE, name), ":" + name) != 0:
             return 1
 
     # The search logic lives in the brain package, so refresh the city data too.
     print("== refreshing city data ==")
     mpremote(port, "cp",
-             os.path.join(HERE, "..", "src", "smart_kosher", "data", "cities.json"),
+             os.path.join(ROOT, "src", "smart_kosher", "data", "cities.json"),
              ":/lib/smart_kosher/data/cities.json")
     mpremote(port, "cp",
-             os.path.join(HERE, "..", "src", "smart_kosher", "data", "cities.py"),
+             os.path.join(ROOT, "src", "smart_kosher", "data", "cities.py"),
              ":/lib/smart_kosher/data/cities.py")
     mpremote(port, "cp",
-             os.path.join(HERE, "..", "src", "smart_kosher", "data", "__init__.py"),
+             os.path.join(ROOT, "src", "smart_kosher", "data", "__init__.py"),
              ":/lib/smart_kosher/data/__init__.py")
 
     print("== running ==")
@@ -70,11 +78,11 @@ def main():
         # screen stays black. This step was once a reset with no copy, and the
         # only symptom was a dead panel long after the run reported success.
         print("== restoring main.py ==")
-        if mpremote(port, "cp", os.path.join(HERE, "main.py"), ":main.py") != 0:
+        if mpremote(port, "cp", os.path.join(DEVICE, "main.py"), ":main.py") != 0:
             print("!! could not restore main.py -- the panel will boot to the "
                   "REPL with a black screen. Re-run:")
-            print("   python -m mpremote connect {} cp panel_mp/main.py :main.py"
-                  .format(port))
+            print("   python -m mpremote connect {} cp "
+                  "products/panel/device/main.py :main.py".format(port))
             return 1
         mpremote(port, "reset")
         print("screen is coming back")

@@ -5,7 +5,7 @@ tests/data/zmanim_golden.csv.gz -- KosherJava's own output. This closes the last
 gap in the chain: the host suite proves the algorithm, and this proves the
 device running it agrees, on a single-precision float build where it might not.
 
-    python panel_mp/run_hwtest_zmanim.py
+    python products/panel/host/run_hwtest_zmanim.py
 """
 
 import csv
@@ -17,7 +17,10 @@ import sys
 from run_common import find_panel, mpremote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+# host/ -> panel/ -> products/ -> repo root.
+ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+DEVICE = os.path.join(HERE, os.pardir, "device")
+HWTEST = os.path.join(HERE, os.pardir, "hwtest")
 GOLDEN = os.path.join(ROOT, "tests", "data", "zmanim_golden.csv.gz")
 
 # Our key -> reference column, same mapping the host suite uses.
@@ -45,7 +48,7 @@ def main():
         return 1
 
     print("== uploading ==")
-    if mpremote(port, "cp", os.path.join(HERE, "hwtest_zmanim.py"),
+    if mpremote(port, "cp", os.path.join(HWTEST, "hwtest_zmanim.py"),
                 ":hwtest_zmanim.py") != 0:
         return 1
 
@@ -57,10 +60,10 @@ def main():
     # main.py goes back before anything else can fail -- a black screen is not
     # an acceptable outcome of a read-only check.
     print("== restoring main.py ==")
-    if mpremote(port, "cp", os.path.join(HERE, "main.py"), ":main.py") != 0:
+    if mpremote(port, "cp", os.path.join(DEVICE, "main.py"), ":main.py") != 0:
         print("!! could not restore main.py; run:")
-        print("   python -m mpremote connect {} cp panel_mp/main.py :main.py"
-              .format(port))
+        print("   python -m mpremote connect {} cp "
+              "products/panel/device/main.py :main.py".format(port))
         return 1
     mpremote(port, "reset")
 

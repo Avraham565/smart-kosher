@@ -1,4 +1,4 @@
-# Deploy panel_mp to a CrowPanel running lvgl_micropython.
+# Deploy products/panel/device to a CrowPanel running lvgl_micropython.
 #
 # DMA-safe procedure (learned the hard way — see memory lvgl-crowpanel): LVGL's
 # RGB DMA keeps running in the background even after main.py crashes to the REPL,
@@ -13,7 +13,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $here     = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Split-Path -Parent $here
+$device   = Join-Path $here "..\device"
+# host/ -> panel/ -> products/ -> repo root.
+$repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 $pkgSrc   = Join-Path $repoRoot "src\smart_kosher"
 $mpr      = "python", "-m", "mpremote", "connect", $Port
 
@@ -29,26 +31,27 @@ if ($LASTEXITCODE -ne 0) { throw "clean_board failed to reach a clean state on $
 Start-Sleep -Seconds 1
 
 Write-Host "== 2) copy fonts to board root (binfont path is 'S:<name>') =="
-Get-ChildItem (Join-Path $here "fonts\*.bin") | ForEach-Object {
+Get-ChildItem (Join-Path $device "fonts\*.bin") | ForEach-Object {
     Write-Host "   font ->" $_.Name
     Mpr cp $_.FullName (":" + $_.Name)
 }
 
 Write-Host "== 3) copy UI modules to board root =="
-$modules = "theme.py", "widgets.py", "reactive.py", "store.py", "hebdate.py",
-           "clock.py", "shell.py", "pages.py", "keyboard.py", "text_input.py",
-           "settime.py", "city_picker.py", "zmanim_page.py", "toast.py", "dev_common.py",
-           "zone_picker.py", "rooms_page.py", "room_page.py", "device_page.py",
-           "sched_labels.py", "sched_describe.py", "schedules_page.py",
-           "schedule_add.py", "display.py", "ui_home.py", "lvgl_loop.py",
-           "bridge.py", "brain.py", "uart_tap.py"
-# uart_tap.py is imported unconditionally by main.py (it decides whether to
-# install itself), so leaving it out of this list bricks the boot.
-# scheduler.py is NOT here any more: it moved into the brain package
-# (smart_kosher/application/scheduler.py) and ships with the /lib copy below.
+# The payload is the directory, not a list. This was 29 hand-maintained names,
+# and the failure mode was silent: uart_tap.py is imported unconditionally by
+# main.py, so omitting it bricked the boot, and nothing but a board could say
+# so. device/ now means "this is what gets flashed" -- adding a module there is
+# the whole change, and a module that is not there is not part of the product.
+# main.py is excluded here and copied last, in step 4.
+# (scheduler.py is not a root module any more: it moved into the brain package
+# at smart_kosher/application/scheduler.py and ships with the /lib copy below.)
+$modules = Get-ChildItem (Join-Path $device "*.py") -File |
+           Where-Object { $_.Name -ne "main.py" } |
+           Sort-Object Name
+if ($modules.Count -eq 0) { throw "no modules found in $device -- wrong path?" }
 foreach ($m in $modules) {
-    Write-Host "   module ->" $m
-    Mpr cp (Join-Path $here $m) (":" + $m)
+    Write-Host "   module ->" $m.Name
+    Mpr cp $m.FullName (":" + $m.Name)
 }
 
 Write-Host "== 3b) copy brain package to /lib/smart_kosher =="
@@ -84,6 +87,6 @@ foreach ($stale in @("scheduler.py")) {
 }
 
 Write-Host "== 4) main.py last, then reset =="
-Mpr cp (Join-Path $here "main.py") ":main.py"
+Mpr cp (Join-Path $device "main.py") ":main.py"
 Mpr reset
 Write-Host "== done. Watch the panel; read logs with: python -m mpremote connect $Port =="

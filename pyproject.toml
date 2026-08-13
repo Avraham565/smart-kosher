@@ -34,12 +34,12 @@ testpaths = ["tests"]
 target-version = "py38"
 # Exploratory probe scripts are not held to production lint.
 extend-exclude = ["tools/zigbee_probe"]
-# First-party roots. `panel_mp` and `client` are flat by necessity -- the
-# device (and the bundled exe) import those modules from their own root, so
-# `import store` is first-party even though there is no package. Without them
-# listed, ruff read every such import as third-party and each file carried a
-# permanent, unfixable I001.
-src = [".", "src", "panel_mp", "client"]
+# First-party roots. The panel's device/hwtest modules and `client` are flat by
+# necessity -- the device (and the bundled exe) import those modules from their
+# own root, so `import store` is first-party even though there is no package.
+# Without them listed, ruff read every such import as third-party and each file
+# carried a permanent, unfixable I001.
+src = [".", "src", "products/panel/device", "products/panel/hwtest", "client"]
 
 [tool.ruff.lint]
 # Correctness core (pyflakes + selected pycodestyle) plus import ordering.

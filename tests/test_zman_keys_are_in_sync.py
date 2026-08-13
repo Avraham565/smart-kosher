@@ -23,8 +23,8 @@ from smart_kosher.domain.schedules import RETIRED_ZMAN_KEYS, ZMAN_KEYS
 from smart_kosher.zmanim import compute_zmanim
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHED_LABELS = ROOT / "panel_mp" / "sched_labels.py"
-ZMANIM_PAGE = ROOT / "panel_mp" / "zmanim_page.py"
+SCHED_LABELS = ROOT / "products" / "panel" / "device" / "sched_labels.py"
+ZMANIM_PAGE = ROOT / "products" / "panel" / "device" / "zmanim_page.py"
 CLIENT_LABELS = ROOT / "client" / "ui" / "js" / "labels.js"
 
 

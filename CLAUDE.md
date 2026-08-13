@@ -6,7 +6,7 @@
 ## מוצרים
 
 - **מוצר א׳** — CrowPanel S3 + H2: UI + מוח + רדיו בתהליך MicroPython אחד
-  (`panel_mp/`). **מוצר ב׳** — AtomS3 Lite + NanoC6: hub חסר-מסך (`products/hub/`).
+  (`products/panel/`). **מוצר ב׳** — AtomS3 Lite + NanoC6: hub חסר-מסך (`products/hub/`).
   שניהם מייבאים את אותה ליבה מ-`src/smart_kosher/`.
 
 ## שכבות
@@ -26,7 +26,7 @@
   פלטפורמה דרך `hasattr(gc, "mem_free")`.
 - `await` בתוך comprehension אסור. `json.dumps` לא מקבל kwargs.
 - כל `asyncio.create_task()` חייב הפניה חיה ב-local/set — אחרת המשימה נאספת
-  לפני שרצה (`panel_mp/bridge.py:_pending`, `zigbee_gateway.py:_deliver`).
+  לפני שרצה (`products/panel/device/bridge.py:_pending`, `zigbee_gateway.py:_deliver`).
 
 ## דומיין
 
@@ -76,7 +76,7 @@
   גם אנימציית מסך-מלא וגלילה.
 - **מוצר ב׳:** שם זו האסטרטגיה **הנכונה** ומופעלת בכוונה
   (`web/server.py`, after_request) — אין PSRAM ואין RGB scanout.
-- LVGL נשאב מלולאת ה-asyncio (`panel_mp/lvgl_loop.py`), **לא** מ-`TaskHandler` —
+- LVGL נשאב מלולאת ה-asyncio (`products/panel/device/lvgl_loop.py`), **לא** מ-`TaskHandler` —
   אחרת callbacks מתנגשים עם ה-pump.
 - אל תחקור UI מה-REPL תוך כדי ריצה; זה מפיל את הלוח.
 

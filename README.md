@@ -11,7 +11,7 @@ behavior for Shabbat and Jewish holidays.
 |---|---|---|
 | status | **active** | **paused** — code kept, not being worked on |
 | hardware | CrowPanel Advance 7" (ESP32-S3) + ESP32-H2 | M5 AtomS3 Lite + M5 NanoC6 |
-| runs | `panel_mp/` — UI **and** brain in one MicroPython process | `products/hub/` — API only, no UI |
+| runs | `products/panel/` — UI **and** brain in one MicroPython process | `products/hub/` — API only, no UI |
 | client | itself (touchscreen) | `client/` — a Windows app over USB or LAN |
 | schedules fire? | yes | **no — the engine is shared, but no task starts it** |
 
@@ -29,7 +29,10 @@ src/smart_kosher/         the brain — hardware-independent, unit-tested
   web/                    HTTP channel (Microdot) over the Api
   data/                   packaged and validated city profiles
 
-panel_mp/                 PRODUCT A firmware: LVGL UI + brain + scheduler
+products/panel/           PRODUCT A: LVGL UI + brain + scheduler
+  device/                 flashed to the CrowPanel — the deploy payload IS this
+  hwtest/                 device-side test suites, uploaded per run
+  host/                   deploy, launchers, clean_board — run on the PC
 products/hub/             PRODUCT B (paused)
   device/                 flashed to the AtomS3: main.py, device_cleanup.py
   host/                   deploy.ps1, runs on the PC
@@ -218,7 +221,7 @@ bash firmware/h2_coordinator/host_test/run.sh
 On real hardware, against the real H2 and real relays:
 
 ```powershell
-python panel_mp/run_hwtest.py
+python products/panel/host/run_hwtest.py
 ```
 
 On real hardware, against the real display — builds each screen on the panel
@@ -226,7 +229,7 @@ and checks it fits 800×480, since anything that does not is drawn off the page
 and lost silently (there is no scrolling to reach it):
 
 ```powershell
-python panel_mp/run_hwtest_ui.py
+python products/panel/host/run_hwtest_ui.py
 ```
 
 On real hardware, zmanim computed by the device diffed against the committed
@@ -235,7 +238,7 @@ added to a Julian day can vanish entirely — the host suite cannot see that, so
 this is the only check that covers the device's arithmetic:
 
 ```powershell
-python panel_mp/run_hwtest_zmanim.py
+python products/panel/host/run_hwtest_zmanim.py
 ```
 
 All three stop `main.py` for the run and restore it afterwards.

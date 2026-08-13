@@ -6,8 +6,8 @@ own), stopping main.py so the REPL is usable without the display's DMA racing
 the transfer, and -- the one that kept being forgotten -- restoring main.py
 afterwards so the screen comes back.
 
-    python panel_mp/run_hwtest.py
-    python panel_mp/run_hwtest.py --actuator <ieee> --dut <ieee>
+    python products/panel/host/run_hwtest.py
+    python products/panel/host/run_hwtest.py --actuator <ieee> --dut <ieee>
 """
 
 import argparse
@@ -18,6 +18,9 @@ import sys
 from run_common import find_panel, mpremote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# Siblings of host/: what the board runs, and what is uploaded only for a test.
+DEVICE = os.path.join(HERE, os.pardir, "device")
+HWTEST = os.path.join(HERE, os.pardir, "hwtest")
 
 # The bench rig: the older relay drives the newer one's switch input, so
 # commanding it stands in for a person at the wall switch.
@@ -47,7 +50,7 @@ def main():
         return 1
 
     print("== uploading hwtest.py ==")
-    if mpremote(port, "cp", os.path.join(HERE, "hwtest.py"), ":hwtest.py") != 0:
+    if mpremote(port, "cp", os.path.join(HWTEST, "hwtest.py"), ":hwtest.py") != 0:
         return 1
 
     print("== running ==")
@@ -56,7 +59,7 @@ def main():
 
     if not args.keep_repl:
         print("== restoring main.py ==")
-        mpremote(port, "cp", os.path.join(HERE, "main.py"), ":main.py")
+        mpremote(port, "cp", os.path.join(DEVICE, "main.py"), ":main.py")
         mpremote(port, "reset")
         print("screen is coming back")
     return rc
