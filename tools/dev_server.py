@@ -2,16 +2,19 @@
 
 Usage:
     $env:PYTHONPATH = "src"
-    python dev_server.py
+    python tools/dev_server.py
 
 All data lives in memory only (resets on restart).
-Switch STORAGE = "json" to persist to ./dev_data/ between runs.
+Switch STORAGE = "json" to persist to tools/dev_data/ between runs.
 """
 
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+# tools/ -> repo root, then src. Kept as one call with no assignment before it:
+# a bare sys.path tweak may precede the imports below, a binding may not (E402).
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
 from smart_kosher.adapters import (
     H2Simulator,
@@ -30,10 +33,10 @@ from smart_kosher.web.server import create_app
 
 # ── Storage mode ──────────────────────────────────────────────────────────────
 # "memory" → in-memory only (resets on restart, good for quick UI testing)
-# "json"   → persists to ./dev_data/*.json  (survives restart)
+# "json"   → persists to tools/dev_data/*.json  (survives restart)
 
 STORAGE = "json"
-JSON_DIR = os.path.join(os.path.dirname(__file__), "dev_data")
+JSON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dev_data")
 
 
 def build_repository():

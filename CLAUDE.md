@@ -104,7 +104,7 @@
 ```
 $env:PYTHONPATH = "src"; python -m pytest -q     # 371 טסטים + 1455 subtests
 ruff check .                                      # חייב לעבור נקי
-python dev_server.py                              # API על localhost:5004
+python tools/dev_server.py                        # API על localhost:5004
 ```
 
 `tools/zigbee_probe/` מוחרג מ-lint בכוונה — הוא מכיל סקריפטי חקירה בלבד.
