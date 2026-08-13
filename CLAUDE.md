@@ -14,7 +14,7 @@
 - כיוון התלות: `domain` ← `application` ← `adapters`/`web`/`serial_channel`.
   `ports/` הם עלים מוחלטים. `zmanim/` הוא עלה טהור (אפס תלויות) ולכן `domain`
   רשאי לייבא ממנו. **אין מעגלים, ואין `domain→adapters` או `adapters→application`.**
-- `web/`, `serial_channel.py` ו-`client/` הם **תרגום טרנספורט בלבד**. ולידציה
+- `web/`, `serial_channel.py` ו-`apps/desktop/` הם **תרגום טרנספורט בלבד**. ולידציה
   עסקית וסיווג שגיאות חיים ב-`application/api.py`.
 
 ## ניידות CPython ↔ MicroPython
@@ -84,7 +84,7 @@
 
 `web/route_table.py` הוא **המקור היחיד** למיפוי URL→op. הרכזת רושמת ממנו את
 ה-routes שלה (`web/routes/register_all`) והלקוח השולחני פותר מולו נתיב כשהבקשה
-נוסעת ב-USB (`client/bridge.rest_to_op`). נתיב חדש = שורה אחת בטבלה; שני
+נוסעת ב-USB (`apps/desktop/bridge.rest_to_op`). נתיב חדש = שורה אחת בטבלה; שני
 הטרנספורטים מקבלים אותו.
 אל תוסיף route ישירות באחד הצדדים — כך בדיוק נוצר המצב שבו יכולת עבדה ב-WiFi
 והחזירה 404 ב-USB בשקט. `tests/test_route_table.py` אוכף ששני הצדדים מכסים את

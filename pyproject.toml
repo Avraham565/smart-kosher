@@ -39,7 +39,8 @@ extend-exclude = ["tools/zigbee_probe"]
 # own root, so `import store` is first-party even though there is no package.
 # Without them listed, ruff read every such import as third-party and each file
 # carried a permanent, unfixable I001.
-src = [".", "src", "products/panel/device", "products/panel/hwtest", "client"]
+src = [".", "src", "products/panel/device", "products/panel/hwtest",
+       "apps/desktop"]
 
 [tool.ruff.lint]
 # Correctness core (pyflakes + selected pycodestyle) plus import ordering.

@@ -10,10 +10,11 @@ table is resolvable by the client.
 That is a stronger check than comparing the two implementations to each
 other, which is what a test written before the refactor would have had to do.
 
-The client is loaded from its file rather than by putting `client/` on
-`sys.path`: `client/bridge.py` and `panel_mp/bridge.py` are two different
-modules both named `bridge`, and `tests/test_panel_scheduler.py` already puts
-`panel_mp/` on the path. Two directories competing for one module name works
+The client is loaded from its file rather than by putting `apps/desktop/` on
+`sys.path`: `apps/desktop/bridge.py` and `products/panel/device/bridge.py` are
+two different modules both named `bridge`, and `tests/test_panel_scheduler.py`
+already puts the panel's device directory on the path. Two directories
+competing for one module name works
 only until something imports the other one first, and then it fails by test
 ordering -- so this binds the file directly, under a name of its own.
 """
@@ -29,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _load_client_bridge():
     spec = importlib.util.spec_from_file_location(
-        "client_bridge", ROOT / "client" / "bridge.py")
+        "client_bridge", ROOT / "apps" / "desktop" / "bridge.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

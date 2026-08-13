@@ -12,7 +12,7 @@ behavior for Shabbat and Jewish holidays.
 | status | **active** | **paused** — code kept, not being worked on |
 | hardware | CrowPanel Advance 7" (ESP32-S3) + ESP32-H2 | M5 AtomS3 Lite + M5 NanoC6 |
 | runs | `products/panel/` — UI **and** brain in one MicroPython process | `products/hub/` — API only, no UI |
-| client | itself (touchscreen) | `client/` — a Windows app over USB or LAN |
+| client | itself (touchscreen) | `apps/desktop/` — a Windows app over USB or LAN |
 | schedules fire? | yes | **no — the engine is shared, but no task starts it** |
 
 Both share one brain: `src/smart_kosher/`, imported on the device from `/lib`.
@@ -36,7 +36,7 @@ products/panel/           PRODUCT A: LVGL UI + brain + scheduler
 products/hub/             PRODUCT B (paused)
   device/                 flashed to the AtomS3: main.py, device_cleanup.py
   host/                   deploy.ps1, runs on the PC
-client/                   Windows desktop client for product B (paused)
+apps/desktop/             Windows desktop client for product B (paused)
 
 firmware/
   h2_coordinator/         ESP32-H2 / NanoC6 Zigbee coordinator (C, ESP-IDF)

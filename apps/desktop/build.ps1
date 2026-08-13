@@ -1,13 +1,14 @@
 # Build SmartKosher.exe (one-file, windowed) with PyInstaller.
 #
 # Usage (from the repo root):
-#   powershell -ExecutionPolicy Bypass -File client\build.ps1
+#   powershell -ExecutionPolicy Bypass -File apps\desktop\build.ps1
 #
-# Output: client\dist\SmartKosher.exe
+# Output: apps\desktop\dist\SmartKosher.exe
 # Requires: .venv with pyserial, pywebview, pyinstaller installed.
 
 $ErrorActionPreference = "Stop"
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+# desktop/ -> apps/ -> repo root.
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) { $python = "python" }
 

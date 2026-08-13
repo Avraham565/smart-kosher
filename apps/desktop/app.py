@@ -5,7 +5,7 @@ Starts the local bridge server and opens the UI in a native window
 to the default browser.
 
 Usage:
-    python client/app.py [--port N] [--no-window]
+    python apps/desktop/app.py [--port N] [--no-window]
 
 --port N      bind the bridge to a fixed port (default: any free port)
 --no-window   run the bridge headless (no window/browser) — for testing
@@ -18,11 +18,12 @@ import os
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_SRC = os.path.join(os.path.dirname(_HERE), "src")
+# desktop/ -> apps/ -> repo root, then src.
+_SRC = os.path.join(os.path.dirname(os.path.dirname(_HERE)), "src")
 # The bridge resolves REST paths against the hub's own route table
 # (smart_kosher.web.route_table), so the core package has to be importable.
 # Frozen, PyInstaller has already bundled it as modules; from a checkout it
-# lives in ../src, which nothing else here puts on the path.
+# lives in ../../src, which nothing else here puts on the path.
 sys.path[:0] = [_HERE] if getattr(sys, "frozen", False) else [_HERE, _SRC]
 
 from bridge import LinkError  # noqa: E402  (needs the path setup above)
