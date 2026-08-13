@@ -7,10 +7,18 @@ apart from dev_common.py for exactly that reason: that one is deployed.
 Each launcher used to carry its own byte-identical copy of find_panel() and
 mpremote(), which is three places to edit the day the bench rig changes its
 USB bridge.
+
+restore_main() and run_on_device() are here for a sharper version of the same
+reason. Every launcher deletes main.py (via clean_board) before it can touch the
+board, so every launcher owes it back on every path out -- and all three had the
+same hole, restoring on the success path only. One copy of that obligation is
+one place to get it right.
 """
 
+import os
 import subprocess
 import sys
+import time
 
 # The CrowPanel's USB bridge. It renumbers itself between COM7 and COM8 across
 # reboots, which is why nothing here hardcodes a port.
@@ -31,9 +39,96 @@ def mpremote(port, *args, **kwargs):
 
     Returns the exit code, or -- with ``capture=True`` -- the finished
     CompletedProcess, for a caller that needs to read what the device printed.
+
+    ``timeout=<seconds>`` bounds the wait and raises
+    ``subprocess.TimeoutExpired`` (having killed mpremote) if the board goes
+    quiet. Worth passing on anything that *runs* code: mpremote drives the raw
+    REPL and waits for a terminator, so a board that resets mid-run -- a crash,
+    a boot loop -- never sends one and mpremote waits for it forever, holding
+    the COM port open against the next attempt.
     """
     cmd = [sys.executable, "-m", "mpremote", "connect", port] + list(args)
+    timeout = kwargs.get("timeout")
     if kwargs.get("capture"):
         return subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
-    return subprocess.call(cmd)
+                              encoding="utf-8", errors="replace",
+                              timeout=timeout)
+    return subprocess.call(cmd, timeout=timeout)
+
+
+# How long to listen to the console after a run went quiet, for the reason.
+CONSOLE_CAPTURE_S = 4.0
+
+
+def capture_console(port, seconds=CONSOLE_CAPTURE_S):
+    """Print whatever the board is saying now.
+
+    A crashed panel is not silent -- it boot-loops, and the ROM prints the panic
+    and its backtrace on every cycle. That output is what names the fault
+    (LoadProhibited, a Guru Meditation, a failed mount), and mpremote's raw REPL
+    swallows all of it. So when a run times out, read the port directly.
+    """
+    import serial  # host-only, like find_panel's list_ports
+
+    print("== what the board is saying (%.0fs) ==" % seconds)
+    time.sleep(0.5)     # let Windows release the handle the killed mpremote held
+    heard = b""
+    try:
+        with serial.Serial(port, 115200, timeout=0.2) as ser:
+            deadline = time.time() + seconds
+            while time.time() < deadline:
+                heard += ser.read(ser.in_waiting or 1)
+    except Exception as exc:
+        print("(could not open {}: {})".format(port, exc))
+        return
+    text = heard.decode("utf-8", "replace").strip()
+    print(text if text else "(silent -- it is not even rebooting)")
+
+
+def run_on_device(port, code, timeout, capture=False, hint=None):
+    """Run one snippet on the board, bounded.
+
+    Returns what mpremote returned (the exit code, or the CompletedProcess with
+    ``capture=True``), or ``None`` if the board went quiet -- having said so and
+    dumped the console. ``hint`` is one line of context printed first, e.g. how
+    to read the output that did arrive.
+
+    Unbounded, mpremote waits on the raw REPL for a terminator a reset board
+    never sends, so a board that crashes mid-run hangs the launcher forever --
+    and the restore the caller had planned never runs. That is how a hardware
+    test ends with a dark panel.
+    """
+    try:
+        return mpremote(port, "exec", code, timeout=timeout, capture=capture)
+    except subprocess.TimeoutExpired:
+        print()
+        print("!! the board went quiet after {}s -- it did not finish."
+              .format(timeout))
+        if hint:
+            print("   " + hint)
+        capture_console(port)
+        return None
+
+
+def restore_main(port, device_dir):
+    """Put main.py back on the panel. True if it will boot rendering again.
+
+    A full copy, not a reset: clean_board.py DELETED main.py to get a DMA-free
+    REPL, so a reset alone boots the board to a bare prompt and the screen stays
+    black. This step was once a reset with no copy, and the only symptom was a
+    dead panel long after the run reported success.
+
+    Call it from a ``finally``. Everything between clean_board and here can
+    fail, and the failures are the runs that most need the screen back.
+    """
+    print("== restoring main.py ==")
+    if mpremote(port, "cp", os.path.join(device_dir, "main.py"),
+                ":main.py") != 0:
+        print("!! could not restore main.py -- the panel will boot to the "
+              "REPL with a black screen. Re-run:")
+        print("   python -m mpremote connect {} cp "
+              "products/panel/device/main.py :main.py".format(port))
+        return False
+    mpremote(port, "reset")
+    print("screen is coming back")
+    return True

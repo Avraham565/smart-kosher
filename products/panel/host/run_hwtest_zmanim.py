@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 
-from run_common import find_panel, mpremote
+from run_common import find_panel, mpremote, restore_main, run_on_device
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # host/ -> panel/ -> products/ -> repo root.
@@ -33,6 +33,26 @@ COLUMNS = ("alos_16_1", "misheyakir_11_5", "sunrise_elev",
 
 TOLERANCE_SECONDS = 2.0
 
+# 540 zman sets computed on the device, single-precision, one print per row.
+# Minutes, not seconds -- but not ten minutes, and an unbounded run would hang
+# here forever with main.py still deleted.
+RUN_TIMEOUT_S = 600
+
+
+def _read_device(port):
+    """Upload the suite, run it, and return what it printed (None on failure)."""
+    print("== uploading ==")
+    if mpremote(port, "cp", os.path.join(HWTEST, "hwtest_zmanim.py"),
+                ":hwtest_zmanim.py") != 0:
+        return None
+
+    print("== running on device ==")
+    result = run_on_device(port, "import hwtest_zmanim; hwtest_zmanim.run()",
+                           RUN_TIMEOUT_S, capture=True,
+                           hint="It prints one row per city-day; the last row "
+                                "above is where it stopped.")
+    return None if result is None else result
+
 
 def main():
     port = (sys.argv[1] if len(sys.argv) > 1 else None) or find_panel()
@@ -47,25 +67,20 @@ def main():
         print("could not reach a clean REPL")
         return 1
 
-    print("== uploading ==")
-    if mpremote(port, "cp", os.path.join(HWTEST, "hwtest_zmanim.py"),
-                ":hwtest_zmanim.py") != 0:
-        return 1
-
-    print("== running on device ==")
-    result = mpremote(port, "exec", "import hwtest_zmanim; hwtest_zmanim.run()",
-                      capture=True)
-    output = result.stdout or ""
-
     # main.py goes back before anything else can fail -- a black screen is not
-    # an acceptable outcome of a read-only check.
-    print("== restoring main.py ==")
-    if mpremote(port, "cp", os.path.join(DEVICE, "main.py"), ":main.py") != 0:
-        print("!! could not restore main.py; run:")
-        print("   python -m mpremote connect {} cp "
-              "products/panel/device/main.py :main.py".format(port))
+    # an acceptable outcome of a read-only check. The device work is a function
+    # and the restore a finally, so that holds for the paths that *do* fail too:
+    # the upload returning non-zero, and the run timing out, both used to return
+    # from here with main.py still deleted.
+    try:
+        result = _read_device(port)
+    finally:
+        restored = restore_main(port, DEVICE)
+    if not restored:
         return 1
-    mpremote(port, "reset")
+    if result is None:
+        return 1
+    output = result.stdout or ""
 
     if "BEGIN" not in output or "END" not in output:
         print("device produced no usable output:")

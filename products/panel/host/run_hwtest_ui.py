@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 
-from run_common import find_panel, mpremote
+from run_common import find_panel, mpremote, restore_main, run_on_device
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # host/ -> panel/ -> products/ -> repo root.
@@ -24,10 +24,48 @@ HWTEST = os.path.join(HERE, os.pardir, "hwtest")
 # Uploaded before the run. city_picker is the component under test; the others
 # are what it imports and may have changed alongside it. The suite itself comes
 # from hwtest/; everything it exercises comes from device/.
+#
+# This list is the suite's import closure, by hand, and a name missing from it
+# fails silently in the worst way: the module is already on the board from the
+# last deploy, so nothing errors -- the run just tests the *old* copy and
+# reports green. clock.py was missing for exactly that reason (shell.py imports
+# it, and no test names it directly). When a module here grows an import, add
+# it, or deploy first and run this after.
 SUITE = "hwtest_ui.py"
 PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
            "keyboard.py", "widgets.py", "theme.py", "display.py", "shell.py",
-           "bridge.py", "store.py", "hebdate.py", "reactive.py")
+           "clock.py", "bridge.py", "store.py", "hebdate.py", "reactive.py")
+CITY_DATA = ("cities.json", "cities.py", "__init__.py")
+
+# The suite builds three screens and measures forty city names through each of
+# them: about a minute on the board. Ten times that is not a slow board, it is
+# one that stopped answering -- and unbounded, mpremote waits on the raw REPL
+# for a terminator a reset board will never send, so the run hangs forever with
+# main.py still deleted.
+RUN_TIMEOUT_S = 600
+
+
+def _run_suite(port):
+    print("== uploading ==")
+    if mpremote(port, "cp", os.path.join(HWTEST, SUITE), ":" + SUITE) != 0:
+        return 1
+    for name in PAYLOAD:
+        if mpremote(port, "cp", os.path.join(DEVICE, name), ":" + name) != 0:
+            return 1
+
+    # The search logic lives in the brain package, so refresh the city data too.
+    print("== refreshing city data ==")
+    for name in CITY_DATA:
+        mpremote(port, "cp",
+                 os.path.join(ROOT, "src", "smart_kosher", "data", name),
+                 ":/lib/smart_kosher/data/" + name)
+
+    print("== running ==")
+    rc = run_on_device(
+        port, "import hwtest_ui; raise SystemExit(0 if hwtest_ui.run() else 1)",
+        RUN_TIMEOUT_S,
+        hint="The last check printed above is the one it died on.")
+    return 1 if rc is None else rc
 
 
 def main():
@@ -49,44 +87,19 @@ def main():
         print("could not reach a clean REPL")
         return 1
 
-    print("== uploading ==")
-    if mpremote(port, "cp", os.path.join(HWTEST, SUITE), ":" + SUITE) != 0:
-        return 1
-    for name in PAYLOAD:
-        if mpremote(port, "cp", os.path.join(DEVICE, name), ":" + name) != 0:
-            return 1
-
-    # The search logic lives in the brain package, so refresh the city data too.
-    print("== refreshing city data ==")
-    mpremote(port, "cp",
-             os.path.join(ROOT, "src", "smart_kosher", "data", "cities.json"),
-             ":/lib/smart_kosher/data/cities.json")
-    mpremote(port, "cp",
-             os.path.join(ROOT, "src", "smart_kosher", "data", "cities.py"),
-             ":/lib/smart_kosher/data/cities.py")
-    mpremote(port, "cp",
-             os.path.join(ROOT, "src", "smart_kosher", "data", "__init__.py"),
-             ":/lib/smart_kosher/data/__init__.py")
-
-    print("== running ==")
-    rc = mpremote(port, "exec",
-                  "import hwtest_ui; raise SystemExit(0 if hwtest_ui.run() else 1)")
-
-    if not args.keep_repl:
-        # clean_board.py DELETED main.py to get a DMA-free REPL, so it has to be
-        # copied back -- a reset alone boots the board to a bare prompt and the
-        # screen stays black. This step was once a reset with no copy, and the
-        # only symptom was a dead panel long after the run reported success.
-        print("== restoring main.py ==")
-        if mpremote(port, "cp", os.path.join(DEVICE, "main.py"), ":main.py") != 0:
-            print("!! could not restore main.py -- the panel will boot to the "
-                  "REPL with a black screen. Re-run:")
-            print("   python -m mpremote connect {} cp "
-                  "products/panel/device/main.py :main.py".format(port))
-            return 1
-        mpremote(port, "reset")
-        print("screen is coming back")
-    return rc
+    # Past this line main.py is gone from the board, so every way out of this
+    # function has to put it back -- hence the finally. It used to be restored
+    # on one path only, the successful one: an upload that failed, or a suite
+    # that took the board down with it, returned straight out of here and left
+    # the panel dark, with the restore skipped and nothing saying so. That is
+    # the state a run is *most* likely to end in, because it is the state a bug
+    # in the UI produces.
+    rc = 1
+    try:
+        rc = _run_suite(port)
+    finally:
+        restored = args.keep_repl or restore_main(port, DEVICE)
+    return rc if restored else 1
 
 
 if __name__ == "__main__":
