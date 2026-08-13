@@ -13,6 +13,14 @@
 #
 # Nothing is written to /data -- no setting, schedule or device is changed.
 #
+# This file runs on product A with the display up, so the rendering rules bind
+# it like any other module here: no gc.collect()/gc.threshold(), no full-screen
+# animation, no scrolling (CLAUDE.md). gc.mem_free() below is a read of the
+# heap accounting and collects nothing -- it is the forcing that is banned.
+# Nor does anything here pump LVGL: the loop owns lv.timer_handler
+# (lvgl_loop.py), and geometry questions are answered by update_layout(), which
+# recalculates without drawing.
+#
 # Usage (from the host):  python products/panel/host/run_hwtest_ui.py
 
 import gc
@@ -337,22 +345,56 @@ def test_other_screens_stay_on_the_page(home):
            str(escaped[:3]))
 
     lv.screen_load(home)
-    screen.delete()
+    # Deliberately not deleted. shell.sub_page and every time row on this page
+    # bind labels through reactive.bind_text, and a bound effect is held by the
+    # Signal it read (store.today, store.now) -- nothing here can unsubscribe
+    # them. Deleting the screen frees the labels while nineteen live effects
+    # still hold their set_text, so the next write to either Signal would call a
+    # method on freed memory. Nothing writes them in this suite today, which is
+    # the only reason the delete survived; one more test is all it would take.
+    # The cost of keeping it is one screen for the rest of a one-shot run that
+    # ends in a reset.
+
+
+def _tree_size(obj):
+    """Widgets in the subtree, obj included."""
+    total = 1
+    for index in range(obj.get_child_count()):
+        total += _tree_size(obj.get_child(index))
+    return total
 
 
 def test_reopening_does_not_leak(home):
-    """The screen is cached; opening it ten times must not grow the heap."""
-    gc.collect()
-    before = gc.mem_free()
+    """The screen is cached: ten opens must reuse one tree, not build ten.
+
+    Counted in widgets, not bytes. This used to bracket the loop with
+    gc.collect() + gc.mem_free(), and a forced collect is exactly what this
+    product forbids once rendering has started -- it can free a partial draw
+    buffer that core 0 is still scanning out, which is the LoadProhibited boot
+    loop (CLAUDE.md, memory panel-mp-rendering). The suite was the only place on
+    product A still doing it.
+
+    Losing nothing, either: the heap reading was noise. A passing run reported
+    "-144 bytes" -- a negative leak -- because mem_free() on this board answers
+    for a PSRAM heap the picker is a rounding error against. What a rebuilt
+    screen actually costs is widgets, and the tree can be walked exactly.
+    """
+    first = city_picker._screen
+    before = _tree_size(first)
     for _ in range(10):
         city_picker.open(lambda city_id: None)
         for ch in "בא":
             city_picker._on_letter(ch)
         city_picker._cancel(None)
-    gc.collect()
-    growth = before - gc.mem_free()
-    _check("reopen: ten cycles do not leak", growth < 20000,
-           "{} bytes".format(growth))
+
+    # Identity and size are two different failures, and neither implies the
+    # other: a rebuilt screen is a *new* object with the *same* widget count, so
+    # counting alone would call it clean.
+    _check("reopen: the screen is still the cached one",
+           city_picker._screen is first)
+    after = _tree_size(city_picker._screen)
+    _check("reopen: ten cycles add no widgets", after == before,
+           "{} -> {}".format(before, after))
     _check("reopen: back on the calling screen", lv.screen_active() is home)
 
 

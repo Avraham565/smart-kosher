@@ -26,7 +26,7 @@
 | שכבה ריאקטיבית | `reactive.py`, `store.py` | signals; מסך קורא מ-store דרך `bind`, לא polling |
 | נקודת כניסה | `main.py` | סדר בוט + כל המשימות על לולאה אחת |
 | בדיקות חומרה — רדיו | `hwtest.py`, `run_hwtest.py` | 26 קביעות מול H2 ומפסקים אמיתיים |
-| בדיקות חומרה — מסך | `hwtest_ui.py`, `run_hwtest_ui.py` | 33 קביעות: מסכים נבנים, נכנסים ל-800×480, לא דולפים |
+| בדיקות חומרה — מסך | `hwtest_ui.py`, `run_hwtest_ui.py` | 34 קביעות: מסכים נבנים, נכנסים ל-800×480, לא דולפים |
 | בדיקות חומרה — זמנים | `hwtest_zmanim.py`, `run_hwtest_zmanim.py` | 540 ערכים מהמכשיר מול טבלת הייחוס (float חד-דיוק!) |
 
 שאר הקבצים הם מסכים (`ui_home`, `rooms_page`, `room_page`, `device_page`,
