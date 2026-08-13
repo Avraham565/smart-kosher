@@ -13,7 +13,7 @@
 #
 # Nothing is written to /data -- no setting, schedule or device is changed.
 #
-# Usage (from the host):  python panel_mp/run_hwtest_ui.py
+# Usage (from the host):  python products/panel/host/run_hwtest_ui.py
 
 import gc
 

@@ -1,6 +1,6 @@
 # HomeScreen — product A wall panel (the idle "wall clock" face). MicroPython
 # twin of the C firmware's ui_home.c (deleted 2026-08-05; see
-# experiments/_archive).
+# docs/display-lineage.md).
 #
 # Layout (800x480, RTL), all static — no scroll, no animation:
 #   header 110px: logo (right) . clock + Hebrew/Gregorian date (left)

@@ -7,7 +7,7 @@
 # beyond the executor's gateway hop -- no LVGL, so it is fully testable on
 # CPython (tests/test_panel_scheduler.py).
 #
-# It lived in panel_mp/ until 2026-08-05, which made automation a property of
+# It lived in the panel's own directory until 2026-08-05, which made automation a property of
 # one product's UI folder rather than of the brain: the headless hub imports the
 # same brain but could not reach this file, so schedules saved there were stored
 # and never fired. It depends on nothing above the application layer, so this is
@@ -125,7 +125,7 @@ class Scheduler:
 
         ``composed`` is anything exposing ``repository``, ``settings`` and
         ``executor`` -- duck-typed rather than imported, so this stays free of
-        any one product's composition root (panel_mp.brain.Brain today).
+        any one product's composition root (the panel's brain.Brain today).
         Sharing the *executor* is the load-bearing part: the schedule path and
         the UI's manual-control path must go through the same journal, or a tap
         and a schedule can double-send or lose each other's dedup history.

@@ -1,6 +1,6 @@
 # App shell — the reusable frame every non-home page shares, so pages differ
 # only in their content, never in their chrome. MicroPython twin of
-# the C firmware's shell.c (deleted 2026-08-05; see experiments/_archive).
+# the C firmware's shell.c (deleted 2026-08-05; see docs/display-lineage.md).
 # A fresh screen with a thin 64px header (title on the
 # right = RTL reading start, "חזרה" on the left, optional corner clock) over an
 # empty body. Back always returns home. Static page, instant swap.

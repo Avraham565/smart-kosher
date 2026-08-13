@@ -2,7 +2,7 @@
 
 This simulator uses the DeviceGateway internal status contract. It intentionally
 skips UART framing, Zigbee network state, joining, and device addressing. Use
-experiments/zigbee_probe for hardware-proven behavior.
+firmware/h2_coordinator for hardware-proven behavior.
 """
 
 from ..domain._values import clone_json

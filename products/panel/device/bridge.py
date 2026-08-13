@@ -11,7 +11,7 @@
 # concurrently with the pump (no LVGL re-entrancy).
 #
 # KEEPALIVE: this MicroPython asyncio will garbage-collect a task whose reference
-# nobody holds, before it runs (same reason deploy/atoms3/main.py keeps its
+# nobody holds, before it runs (same reason products/hub/device/main.py keeps its
 # create_task() handles in locals). A fire-and-forget dispatch from a UI callback
 # has no such local, so we pin every in-flight task in ``_pending`` and drop it
 # on completion. Without this the op silently never runs.

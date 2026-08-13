@@ -1,6 +1,6 @@
 """
 s3_ui_probe.py  —  Zigbee UI on CrowPanel Advance 7"
-experiments/zigbee_probe/tools/
+tools/zigbee_probe/
 
 ═══════════════════════════════════════════════════════════════════════════════
 STEP 0 — Build & flash firmware (do once, on a Linux/WSL/Mac build host):

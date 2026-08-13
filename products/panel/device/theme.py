@@ -1,6 +1,6 @@
-# Design tokens mirroring product B's web UI (client/ui/style.css :root), so
+# Design tokens mirroring product B's web UI (apps/desktop/ui/style.css :root), so
 # both faces of the product match. Originally kept 1:1 with the C firmware's
-# theme.h, which was deleted 2026-08-05 (see experiments/_archive) -- this is
+# theme.h, which was deleted 2026-08-05 (see docs/display-lineage.md) -- this is
 # now the only copy.
 #
 # Fonts load at runtime (lv.binfont_create) after the display is up, so unlike

@@ -4,7 +4,7 @@ Every REST call has two ends, and until this table existed each end carried
 its own copy of the mapping. The hub registered URLs onto ops in
 ``web/routes``; the desktop client, which has to make the same call travel
 over USB when there is no network, re-implemented the same mapping by hand in
-``client/bridge.rest_to_op``. Its docstring said so outright -- "mirrors the
+``apps/desktop/bridge.rest_to_op``. Its docstring said so outright -- "mirrors the
 hub's own HTTP adapter" -- and nothing checked that the mirror stayed true.
 
 A route added to one side and forgotten on the other does not fail loudly: the
@@ -14,7 +14,7 @@ most people test with is the one that works.
 So the mapping is data now, and both ends read it:
 
     hub     web/routes.register_all  -> registers each Route on microdot
-    client  client/bridge.rest_to_op -> matches a URL against the same Routes
+    client  apps/desktop/bridge.rest_to_op -> matches a URL against the same Routes
 
 Adding a route here is the whole change; both transports pick it up.
 

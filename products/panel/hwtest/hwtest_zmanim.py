@@ -9,7 +9,7 @@
 # exactly how the two-pass NOAA refinement was dead on hardware for months
 # while every test was green. Agreement here is worth more than agreement there.
 #
-# Usage (from the host):  python panel_mp/run_hwtest_zmanim.py
+# Usage (from the host):  python products/panel/host/run_hwtest_zmanim.py
 
 from smart_kosher.data import load_cities
 from smart_kosher.zmanim import compute_zmanim

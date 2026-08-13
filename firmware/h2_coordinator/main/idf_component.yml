@@ -8,7 +8,7 @@
 ## ">=2.0.0" with dependencies.lock gitignored, so every build silently
 ## resolved whatever was newest and no two builds were guaranteed to be the
 ## same firmware. Raising it is a deliberate act: rebuild, reflash, and re-run
-## panel_mp/run_hwtest.py before trusting the result.
+## products/panel/host/run_hwtest.py before trusting the result.
 ##
 ## The IDF constraint below is a floor, NOT a pin, and cannot be otherwise:
 ## this manifest can only *reject* an incompatible toolchain, never *select*

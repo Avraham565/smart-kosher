@@ -1,6 +1,6 @@
 """Production DeviceGateway over the NanoC6/H2 coordinator UART link.
 
-Implements the protocol proven on hardware in experiments/zigbee_probe
+Implements the protocol proven on hardware by firmware/h2_coordinator
 (Gate 2+3 pass on both ESP32-H2 and NanoC6, 2026-07-09): CRC32+JSON line
 envelope, op-based commands (ping / permit_join / on_off / read_attr /
 enable_reporting / remove_device), request_id as the only correlation id,
@@ -711,7 +711,7 @@ class ZigbeeGateway(DeviceGateway):
                                       "command_id": rid}
 
         # Held in a local until gather returns: on MicroPython a task nobody
-        # references is collected before it runs (see panel_mp/bridge.py).
+        # references is collected before it runs (see products/panel/device/bridge.py).
         workers = []
         for _ in range(min(_COMMAND_WINDOW, len(targets))):
             workers.append(asyncio.create_task(worker()))

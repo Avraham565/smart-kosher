@@ -1,6 +1,6 @@
 # Reusable UI components — the small vocabulary every screen is built from, so a
 # working piece is written once and reused, not copy-pasted. MicroPython twin of
-# the C firmware's widgets.c (deleted 2026-08-05; see experiments/_archive).
+# the C firmware's widgets.c (deleted 2026-08-05; see docs/display-lineage.md).
 # theme.py holds tokens + whole-object style helpers; this holds object
 # factories. All LVGL calls run from the asyncio pump (lvgl_loop.py).
 

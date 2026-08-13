@@ -1,7 +1,7 @@
 """AtomS3 Lite entry point — Smart Kosher headless hub (product B).
 
 STATUS: PAUSED (2026-08-05). The code is kept and still builds, but product A
-(panel_mp/) is where the work is. Two things here are known to lag behind it:
+(products/panel/) is where the work is. Two things here are known to lag behind it:
 
   * NO SCHEDULER. This file composes the Executor and the Api but never starts
     a scheduler tick, so a schedule saved on this hub is stored and then never

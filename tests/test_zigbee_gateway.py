@@ -1,5 +1,5 @@
 """ZigbeeGateway adapter tests — against the hardware-proven coordinator
-protocol (experiments/zigbee_probe, Gate 2+3 pass on H2 and NanoC6).
+protocol (firmware/h2_coordinator, Gate 2+3 pass on H2 and NanoC6).
 
 FakeUart plays the coordinator: frames are real CRC32+JSON lines through
 the same uart_codec the device uses, so a drift between the adapter and

@@ -24,7 +24,7 @@
 # If you are running this against a rig where a device may be offline, copy
 # /data/zigbee_devices.json first.
 #
-# Usage (from the host):  python panel_mp/run_hwtest.py
+# Usage (from the host):  python products/panel/host/run_hwtest.py
 
 import asyncio
 import time
@@ -289,7 +289,7 @@ async def _run(actuator, dut):
         print("registry holds {} device(s):".format(len(known)))
         for ieee in known:
             print("   {}  -> {}".format(ieee, h.short_of(ieee)))
-        print("re-run with:  python panel_mp/run_hwtest.py --actuator <ieee> "
+        print("re-run with:  python products/panel/host/run_hwtest.py --actuator <ieee> "
               "--dut <ieee>")
         return
 

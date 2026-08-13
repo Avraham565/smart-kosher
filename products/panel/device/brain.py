@@ -6,7 +6,7 @@
 # returns it so the UI can call ``await api.dispatch(op, params)`` directly, in
 # memory, with no HTTP/serial hop (see bridge.py for the sync-callback glue).
 #
-# This is deliberately NOT the composition in deploy/atoms3/main.py, which wires
+# This is deliberately NOT the composition in products/hub/device/main.py, which wires
 # the same services for product B (headless AtomS3). Two differences are
 # load-bearing here:
 #   * No Microdot/HTTP channel and no ``create_app`` -- the panel is its own

@@ -2,7 +2,7 @@
 # lvgl_micropython. Extracted from the proven crowpanel_ui/hebrew_probe.py path
 # (Hebrew/RTL/touch verified on this exact board 2026-07-16); that probe was
 # deleted 2026-08-12 and is recoverable from git history -- see
-# experiments/_archive/README.md for the full display lineage.
+# docs/display-lineage.md for the full display lineage.
 #
 # RENDERING NOTE — this is the whole point of the port. The RGB panel has no
 # GRAM: the ESP32 re-streams the framebuffer from PSRAM every frame, so a PSRAM

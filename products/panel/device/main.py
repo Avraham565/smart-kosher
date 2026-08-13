@@ -38,7 +38,7 @@ _CLOCK_PERIOD_S = 10
 _DEVICES_PERIOD_S = 3
 
 # Link to the H2 coordinator, proven on this exact board in
-# experiments/zigbee_probe (s3_ui_probe): UART1 TX=GPIO5 RX=GPIO19 @115200, no
+# tools/zigbee_probe/s3_ui_probe.py: UART1 TX=GPIO5 RX=GPIO19 @115200, no
 # conflict with the RGB display pins. Driven event-driven here (StreamReader),
 # not polled from an LVGL timer as the probe did -- we own the asyncio loop.
 _ZIGBEE_UART_ID = 1
