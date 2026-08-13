@@ -6,7 +6,7 @@
 ## מוצרים
 
 - **מוצר א׳** — CrowPanel S3 + H2: UI + מוח + רדיו בתהליך MicroPython אחד
-  (`panel_mp/`). **מוצר ב׳** — AtomS3 Lite + NanoC6: hub חסר-מסך (`deploy/atoms3/`).
+  (`panel_mp/`). **מוצר ב׳** — AtomS3 Lite + NanoC6: hub חסר-מסך (`products/hub/`).
   שניהם מייבאים את אותה ליבה מ-`src/smart_kosher/`.
 
 ## שכבות

@@ -11,7 +11,7 @@ behavior for Shabbat and Jewish holidays.
 |---|---|---|
 | status | **active** | **paused** — code kept, not being worked on |
 | hardware | CrowPanel Advance 7" (ESP32-S3) + ESP32-H2 | M5 AtomS3 Lite + M5 NanoC6 |
-| runs | `panel_mp/` — UI **and** brain in one MicroPython process | `deploy/atoms3/` — API only, no UI |
+| runs | `panel_mp/` — UI **and** brain in one MicroPython process | `products/hub/` — API only, no UI |
 | client | itself (touchscreen) | `client/` — a Windows app over USB or LAN |
 | schedules fire? | yes | **no — the engine is shared, but no task starts it** |
 
@@ -30,7 +30,9 @@ src/smart_kosher/         the brain — hardware-independent, unit-tested
   data/                   packaged and validated city profiles
 
 panel_mp/                 PRODUCT A firmware: LVGL UI + brain + scheduler
-deploy/atoms3/            PRODUCT B firmware (paused)
+products/hub/             PRODUCT B (paused)
+  device/                 flashed to the AtomS3: main.py, device_cleanup.py
+  host/                   deploy.ps1, runs on the PC
 client/                   Windows desktop client for product B (paused)
 
 firmware/
@@ -172,7 +174,7 @@ not deterministic under replay and recovery; manual control may still use it.
 
 ## Known gaps
 
-- **Product B never fires schedules.** `deploy/atoms3/main.py` composes the
+- **Product B never fires schedules.** `products/hub/device/main.py` composes the
   Executor and the Api but never starts a scheduler tick, so a saved schedule
   is stored and never executed there. The engine itself is no longer the
   obstacle — `application/scheduler.py` is in the shared brain and product B

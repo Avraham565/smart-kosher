@@ -49,4 +49,4 @@ select = ["E4", "E7", "E9", "F", "I"]
 [tool.ruff.lint.per-file-ignores]
 # MicroPython firmware: create_task() results are kept in locals on purpose
 # so the event loop's tasks are not garbage-collected. Not dead variables.
-"deploy/atoms3/main.py" = ["F841"]
+"products/hub/device/main.py" = ["F841"]

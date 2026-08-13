@@ -1,7 +1,7 @@
 # Deploy Smart Kosher to the AtomS3 Lite over mpremote.
 #
 # Usage (from the repo root, device connected over USB):
-#   powershell -ExecutionPolicy Bypass -File deploy\atoms3\deploy.ps1
+#   powershell -ExecutionPolicy Bypass -File products\hub\host\deploy.ps1
 #   powershell ... deploy.ps1 -Port COM10      # pin a specific port
 #   powershell ... deploy.ps1 -WithMicrodot    # first deploy only
 #
@@ -20,7 +20,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+# host/ -> hub/ -> products/ -> repo root.
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
+$device = Join-Path $PSScriptRoot "..\device"
 $stage = Join-Path $env:TEMP "sk_atoms3_stage"
 
 # Prefer the repo venv (has mpy-cross + mpremote); `python -m` also dodges
@@ -64,7 +66,7 @@ if ($StageOnly) {
 }
 
 Write-Host "== removing old package on device (avoids stale .py/.mpy shadowing) =="
-Invoke-Expression "$mp run `"$PSScriptRoot\device_cleanup.py`""
+Invoke-Expression "$mp run `"$device\device_cleanup.py`""
 
 Write-Host "== copying smart_kosher package to /lib =="
 Invoke-Expression "$mp fs cp -r `"$stage\smart_kosher`" :/lib/"
@@ -80,8 +82,9 @@ if ($WithMicrodot) {
     Invoke-Expression "$mp fs cp -r `"$microdot\microdot`" :/lib/"
 }
 
+# main.py last, after every module it imports is already on the device.
 Write-Host "== copying main.py =="
-Invoke-Expression "$mp fs cp `"$PSScriptRoot\main.py`" :main.py"
+Invoke-Expression "$mp fs cp `"$device\main.py`" :main.py"
 
 Write-Host "== resetting device =="
 Invoke-Expression "$mp reset"
