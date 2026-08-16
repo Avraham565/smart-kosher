@@ -116,7 +116,8 @@ def _teardown():
 
 def _build():
     ep = _endpoint()
-    scr, body, title = shell.sub_page(ep.get("name") or "מכשיר", on_back=_back)
+    scr, body, title = shell.sub_page(ep.get("name") or "מכשיר", on_back=_back,
+                                      effects=_effects)
     _current["title"] = title
     body.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     body.set_style_pad_row(14, lv.PART.MAIN)

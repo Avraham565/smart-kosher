@@ -12,6 +12,19 @@ from widgets import w_card_button, w_group, w_label
 _screen = None
 _on_pick = None
 _return = None
+_effects = []
+
+
+def _teardown():
+    """Release the previous screen's bindings before it is deleted.
+
+    The shell's corner clock is the only one today, but it is enough: the
+    Signal it read owns it, so deleting the screen without this leaves a live
+    effect writing set_text into a freed label.
+    """
+    for eff in _effects:
+        eff.dispose()
+    del _effects[:]
 
 
 def _back():
@@ -26,7 +39,7 @@ def _pick(zone_id):
 
 
 def _build():
-    scr, body = shell.page_create("בחר חדר", on_back=_back)
+    scr, body = shell.page_create("בחר חדר", on_back=_back, effects=_effects)
     body.set_style_pad_all(16, lv.PART.MAIN)
     grid = w_group(body, lv.FLEX_FLOW.ROW)
     grid.set_width(lv.pct(100))
@@ -48,6 +61,7 @@ def open(on_pick):
     global _screen, _on_pick, _return
     _return = lv.screen_active()
     _on_pick = on_pick
+    _teardown()             # before _build(), so the new screen keeps its own
     old = _screen
     _screen = _build()
     lv.screen_load(_screen)

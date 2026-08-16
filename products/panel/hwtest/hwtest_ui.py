@@ -345,15 +345,62 @@ def test_other_screens_stay_on_the_page(home):
            str(escaped[:3]))
 
     lv.screen_load(home)
-    # Deliberately not deleted. shell.sub_page and every time row on this page
-    # bind labels through reactive.bind_text, and a bound effect is held by the
-    # Signal it read (store.today, store.now) -- nothing here can unsubscribe
-    # them. Deleting the screen frees the labels while nineteen live effects
-    # still hold their set_text, so the next write to either Signal would call a
-    # method on freed memory. Nothing writes them in this suite today, which is
-    # the only reason the delete survived; one more test is all it would take.
-    # The cost of keeping it is one screen for the rest of a one-shot run that
-    # ends in a reset.
+    # Still deliberately not deleted, but for a smaller reason than before.
+    #
+    # The shell's half is fixed: sub_page/page_create now hand the corner
+    # clock's effect to a list the page owns, and the pages that delete screens
+    # dispose it first -- test_deleting_a_sub_page_releases_its_clock below
+    # performs exactly the delete this comment used to forbid.
+    #
+    # What is left is this page's own: zmanim_page._row and its date line call
+    # reactive.bind_text nineteen times and drop every return value, and a bound
+    # effect is owned by the Signal it read (store.today), not by the widget, so
+    # nothing can unsubscribe them. Deleting this screen would still free the
+    # labels under nineteen live effects, and the next date rollover would call
+    # set_text on freed memory. zmanim_page needs the same treatment the shell
+    # just got; until then the cost of keeping the screen is one screen for the
+    # rest of a one-shot run that ends in a reset.
+
+
+def test_deleting_a_sub_page_releases_its_clock(home):
+    """Open a sub-page, delete it, then tick the clock -- the deletion is the test.
+
+    This is routine navigation on the wall panel: leave one room for another and
+    the page you left is deleted. Its corner clock was built by shell.sub_page,
+    which used to drop the effect's only handle on the floor; the Signal keeps
+    the effect subscribed forever, so the deleted screen's label stayed
+    reachable from store.now and the next minute wrote set_text into freed
+    memory. A native fault, which reactive's `except Exception` cannot contain.
+
+    zone_picker is the page under test because it is the one that had no effect
+    list at all, and because it needs no brain: it reads store.zones and builds.
+
+    Two independent assertions, because either alone would pass on a bug. The
+    observer count catches the leak deterministically and would fail on the host
+    too. The store.now write is the part only the board can answer: with orphans
+    subscribed, every one of them fires here, and reaching the line after it is
+    the pass.
+    """
+    import store
+    import zone_picker
+
+    zone_picker.open(lambda zone_id: None)
+    zone_picker._back()
+    settled = len(store.now._observers)      # one live picker screen, one clock
+
+    for _ in range(5):
+        zone_picker.open(lambda zone_id: None)   # deletes the previous screen
+        zone_picker._back()
+
+    after = len(store.now._observers)
+    _check("teardown: five reopens leave no orphan clock effect",
+           after == settled, "{} -> {}".format(settled, after))
+
+    store.now.set((23, 59))
+    store.now.set(None)
+    _check("teardown: a clock tick after the deletes is survivable", True,
+           "{} observers fired".format(after))
+    _check("teardown: back on the calling screen", lv.screen_active() is home)
 
 
 def _tree_size(obj):
@@ -412,6 +459,7 @@ def run():
     test_no_widget_escapes_its_parent(home)
     test_settime_still_fits_with_the_city_row(home)
     test_other_screens_stay_on_the_page(home)
+    test_deleting_a_sub_page_releases_its_clock(home)
     test_reopening_does_not_leak(home)
 
     failed = [name for name, ok, _ in _results if not ok]

@@ -24,9 +24,19 @@ def _back_cb(e):
     lv.screen_load(ui_home.screen())
 
 
-def sub_page(title, on_back=None):
+def sub_page(title, on_back=None, effects=None):
     """Like page_create, but also returns the title label so a page can update
-    it live (e.g. after a rename). Returns (screen, body, title_label)."""
+    it live (e.g. after a rename). Returns (screen, body, title_label).
+
+    ``effects`` is a list the shell appends its own bindings to (today: the
+    corner clock). **A page that deletes its screen must pass one and dispose
+    everything in it before delete().** A bound effect is owned by the Signal it
+    read (reactive.Signal._observers holds it strongly), not by the widget, so an
+    effect nobody kept a handle to can never be unsubscribed -- it outlives the
+    screen and writes set_text into freed memory on the next tick. Accumulating
+    into the caller's list instead of returning a fourth tuple element keeps
+    every existing caller unpacking the same way.
+    """
     scr = lv.obj(None)          # parentless obj == a screen (lv_obj_create(NULL))
     theme.screen(scr)
 
@@ -51,7 +61,9 @@ def sub_page(title, on_back=None):
     if SHELL_CORNER_CLOCK:
         mini = w_label(header, theme.FONTS.body, theme.MUTED, "")
         mini.align(lv.ALIGN.LEFT_MID, 116, 0)   # just right of back
-        clock.bind_time(mini)
+        eff = clock.bind_time(mini)
+        if effects is not None:
+            effects.append(eff)
 
     # ---- body ----
     body = lv.obj(scr)
@@ -64,12 +76,14 @@ def sub_page(title, on_back=None):
     return scr, body, title_lbl
 
 
-def page_create(title, on_back=None):
+def page_create(title, on_back=None, effects=None):
     """Build a sub-page screen. Returns (screen, body) — body is the padded
     content container to fill. Load the screen with lv.screen_load(). ``on_back``
     overrides where the back button goes (default: home); pass a 0-arg callable
-    so nested screens (room -> device) can step back one level."""
-    scr, body, _ = sub_page(title, on_back)
+    so nested screens (room -> device) can step back one level. ``effects`` is
+    passed through to sub_page — see there; a page that deletes its screen must
+    pass one."""
+    scr, body, _ = sub_page(title, on_back, effects)
     return scr, body
 
 

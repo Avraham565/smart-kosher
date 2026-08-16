@@ -153,7 +153,8 @@ def _teardown():
 
 def _build():
     global _list
-    scr, body, title = shell.sub_page(_current["name"] or "חדר", on_back=_back)
+    scr, body, title = shell.sub_page(_current["name"] or "חדר", on_back=_back,
+                                      effects=_effects)
     _current["title"] = title
     body.set_style_pad_all(16, lv.PART.MAIN)
     body.set_flex_flow(lv.FLEX_FLOW.COLUMN)
