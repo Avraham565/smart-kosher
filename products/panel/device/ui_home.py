@@ -36,10 +36,6 @@ def screen():
 # ------------------------------------------------------------------ #
 # navigation                                                         #
 # ------------------------------------------------------------------ #
-def _nav_cb(e, page_id):
-    pages.page_open(page_id)
-
-
 def _settime_cb(e):
     settime.open(_api)
 

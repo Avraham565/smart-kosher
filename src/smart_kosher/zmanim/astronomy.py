@@ -68,13 +68,11 @@ def julian_day(year, month, day):
 def _jc(jd):
     return (jd - _J2000) / _DAYS_PER_CENTURY
 
-def _jd_from_jc(jc):
-    return jc * _DAYS_PER_CENTURY + _J2000
-
 def _jc_plus_days(jc, days):
     """Advance Julian centuries by a day offset, without rebuilding the Julian day.
 
-    Algebraically just ``_jc(_jd_from_jc(jc) + days)``, but not numerically. The
+    Algebraically just converting back to a Julian day, adding, and converting
+    forward again -- but not numerically, and that is the whole point. The
     panel runs a single-precision MicroPython build, where floats near a Julian
     day's 2.46e6 are spaced 0.25 apart -- so ``jd + minutes / 1440`` rounds the
     offset away entirely and the refinement passes below silently do nothing.
@@ -242,20 +240,6 @@ def sun_times(year, month, day, lat, lon, altitude=0):
 # המרות עזר
 # ---------------------------------------------------------------------------
 
-def utc_sun_time(year, month, day, lat, lon, zenith, is_sunrise):
-    """
-    חישוב זמן שמש UTC עם זווית זנית ספציפית — ללא תיקונים נוספים.
-    משמש לחישוב עלות השחר (zenith=106.1°), צאת כוכבים בזוויות (zenith=98.5°) וכו'.
-    מחזיר דקות מחצות UTC (float) או None.
-    """
-    _validate_location(lat, lon)
-    jd = julian_day(year, month, day)
-    try:
-        return _utc_sun_minutes(jd, lat, -lon, zenith, is_sunrise)
-    except (ValueError, ZeroDivisionError):
-        return None
-
-
 def sea_level_zenith():
     """זווית זנית בגובה פני הים: 90° + רדיוס שמש + רפרקציה."""
     return 90.0 + _SOLAR_RADIUS_DEG + _REFRACTION_DEG
@@ -265,6 +249,3 @@ def minutes_to_hms(minutes):
     """דקות מחצות (float) → (hour, minute, second). עובד גם על ערכים שליליים."""
     total = int(round(minutes * 60)) % 86400
     return total // 3600, (total % 3600) // 60, total % 60
-
-def hms_to_minutes(h, m, s=0):
-    return h * 60.0 + m + s / 60.0

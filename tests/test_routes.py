@@ -1037,5 +1037,43 @@ class TestNameRequired(AsyncCase):
         self._run(go())
 
 
+class GcPolicyTests(unittest.TestCase):
+    """Whether a response is followed by gc.collect() is a product decision.
+
+    It used to be decided by hasattr(gc, "mem_free") -- true on BOTH boards,
+    so the switch could not tell product A (where a collect mid-render can
+    free a partial draw buffer: LoadProhibited boot loop) from product B
+    (where collecting is what keeps a no-PSRAM heap usable). The panel was
+    saved only by not building an app at all, while brain.py documents
+    create_app as its intended future channel.
+
+    These run on CPython, where the old platform default was always False --
+    so this branch had no test coverage at all until the flag made it
+    reachable.
+    """
+
+    def _app(self, **kwargs):
+        repo     = MemoryRepository()
+        executor = Executor(H2Simulator(["sent_to_zigbee"]), MemoryEventJournal())
+        return create_app(CrudService(repo),
+                          ControlService(executor, repo),
+                          SettingsStore(_temp_settings_path()),
+                          repo, **kwargs)
+
+    def test_product_a_can_refuse_the_collect(self):
+        self.assertEqual([], self._app(collect_after_request=False)
+                         .after_request_handlers)
+
+    def test_product_b_can_ask_for_the_collect(self):
+        self.assertEqual(1, len(self._app(collect_after_request=True)
+                                .after_request_handlers))
+
+    def test_default_is_unchanged_platform_behaviour(self):
+        # None keeps the historical default so no existing caller moved.
+        from smart_kosher.web.server import _IS_MICROPYTHON
+        expected = 1 if _IS_MICROPYTHON else 0
+        self.assertEqual(expected, len(self._app().after_request_handlers))
+
+
 if __name__ == "__main__":
     unittest.main()

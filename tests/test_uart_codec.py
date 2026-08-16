@@ -75,22 +75,25 @@ class DecodeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             uart_decode(tampered)
 
+    # A prefix that cannot be parsed is bad_frame; only a checksum that
+    # disagrees is bad_crc. link.c answers the same two codes on the wire
+    # (docs/UART_PROTOCOL.md), and this side used to call all three bad_crc.
     def test_missing_space_raises(self):
         with self.assertRaises(ValueError) as ctx:
             uart_decode("deadbeef")
-        self.assertIn("bad_crc", str(ctx.exception))
+        self.assertIn("bad_frame", str(ctx.exception))
 
     def test_non_hex_prefix_raises(self):
         with self.assertRaises(ValueError) as ctx:
             uart_decode("ZZZZZZZZ {}")
-        self.assertIn("bad_crc", str(ctx.exception))
+        self.assertIn("bad_frame", str(ctx.exception))
 
     def test_crc_prefix_must_be_eight_lowercase_hex_chars(self):
         for line in ("1 {}", "000000001 {}", "DEADBEEF {}", "+0000001 {}"):
             with self.subTest(line=line):
                 with self.assertRaises(ValueError) as ctx:
                     uart_decode(line)
-                self.assertIn("bad_crc", str(ctx.exception))
+                self.assertIn("bad_frame", str(ctx.exception))
 
     def test_trailing_newline_accepted(self):
         line = uart_encode({"v": 1}).decode("utf-8")

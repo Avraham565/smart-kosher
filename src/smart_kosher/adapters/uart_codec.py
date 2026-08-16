@@ -24,16 +24,24 @@ def encode(msg):
 
 
 def decode(line):
-    """Parse and CRC-validate one UART line.  Raises ValueError on mismatch."""
+    """Parse and CRC-validate one UART line.  Raises ValueError on mismatch.
+
+    The two failures are named as the protocol names them: a prefix that
+    cannot be parsed is ``bad_frame``, a checksum that disagrees is
+    ``bad_crc`` (docs/UART_PROTOCOL.md, and link.c answers the same two on
+    the wire). This side never sends the code back -- the caller catches
+    ValueError and drops the line -- but a framing fault reported as a
+    checksum fault sends whoever is reading the log after the wrong cause.
+    """
     if isinstance(line, (bytes, bytearray)):
         line = line.decode("utf-8")
     line = line.rstrip("\n\r")
     parts = line.split(" ", 1)
     if len(parts) != 2:
-        raise ValueError("bad_crc: missing space delimiter")
+        raise ValueError("bad_frame: missing space delimiter")
     crc_hex, body = parts
     if len(crc_hex) != 8 or any(ch not in _LOWER_HEX for ch in crc_hex):
-        raise ValueError("bad_crc: non-hex prefix {!r}".format(crc_hex))
+        raise ValueError("bad_frame: non-hex prefix {!r}".format(crc_hex))
     expected = int(crc_hex, 16)
     actual = binascii.crc32(body.encode("utf-8")) & 0xFFFFFFFF
     if expected != actual:

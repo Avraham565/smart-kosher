@@ -189,7 +189,11 @@ def main():
         status_info=status_info,
         zigbee=gateway,
     )
-    app = create_app(crud, control, settings, api=api)
+    # Product B chooses this, explicitly: no PSRAM, no RGB scanout, so
+    # collecting after each response is the right trade here. Product A must
+    # pass False -- see the note in web/server.py.
+    app = create_app(crud, control, settings, api=api,
+                     collect_after_request=True)
 
     gc.collect()
     # Collect early and often instead of waiting for the heap to fill —

@@ -23,8 +23,28 @@ class RepositoryError(Exception):
     pass
 
 
-class RepositoryValidationError(RepositoryError):
-    pass
+class RepositoryValidationError(ValueError):
+    """Invalid input, not a storage failure -- so it is a ValueError.
+
+    It descends from ValueError and not from RepositoryError, which is the
+    same shape the domain uses (DeviceValidationError, ScheduleValidationError
+    are both ValueError). upsert()/replace_all() catch the domain's own
+    XValidationError and re-raise it as this type; while this was a plain
+    RepositoryError that re-raise *destroyed* the classification, because
+    Api.dispatch turns ValueError into bad_request/400 and everything else
+    into internal/500. Every rejected field answered 500 on both products,
+    while the suite -- which builds its clients on MemoryRepository, which
+    does no such conversion -- saw 400 and passed.
+
+    Deriving from (RepositoryError, ValueError) would also have worked on
+    CPython, but that is multiple inheritance from a native type, which
+    MicroPython restricts -- and it would have been the only such class in
+    the code that ships to a board. Nothing catches RepositoryError as a
+    base: it is raised directly, once, for a directory that cannot be made.
+
+    RepositoryCorruptionError deliberately stays outside ValueError: corrupt
+    storage is an internal fault, and 500 is the right answer for it.
+    """
 
 
 class RepositoryCorruptionError(RepositoryError):

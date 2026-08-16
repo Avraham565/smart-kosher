@@ -1,316 +1,302 @@
 # ביקורת ארכיטקטונית — מסקנות
 
-תאריך: 2026-08-12 · ענף: `feat/scheduler-engine-and-h2-delivery-proof` · HEAD: `900173a`
-היקף: 187 קבצים מנוהלים + 2 לא-מנוהלים, ~25,900 שורות, 6 שפות.
-שיטה: פנקס כיסוי מכני → תצפית → אינדקס לפי מושג → שיפוט.
-
-> **סטטוס: כל הממצאים תוקנו** (2026-08-12, אחרי האודיט). ראו
-> [סעיף הביצוע](#מה-בוצע-בפועל) בסוף. הגוף שלמטה נשאר כפי שנכתב באודיט —
-> הוא הנימוק לתיקונים, לא תיאור המצב הנוכחי.
+תאריך: 2026-08-14 · ענף: `main` · HEAD: `eda4233`
+היקף: 189 קבצים מנוהלים, 6 שפות. שיטה: פנקס כיסוי מכני → תצפית → אינדקס לפי
+מושג → שיפוט, מול קבצי טיוטה ולא מול זיכרון.
+קודמתה (2026-08-12, ציון 8/10, כל ממצאיה בוצעו) נמצאת בהיסטוריית git.
 
 ---
 
-## ציון בריאות: **8 / 10**
+## ציון בריאות: **8.5 / 10**
 
-**זה לא ריפו מוזנח. זה ריפו שהתחזק היטב סביב ציר אחד ולא הכליל את השיטה.**
+**הריפו הכליל את השיטה שהאודיט הקודם מצא רק בפינה אחת — ונשארו שני מקומות
+שהיא לא הגיעה אליהם.**
 
-מה שמצדיק את הציון הגבוה — כל אחד מהם נמדד, לא הוערך:
+האודיט הקודם סיכם: "תשעה מושגים חוצי-יחידות, ולאחד בלבד יש הצמדה", והשורש
+שזוהה היה שאין `CLAUDE.md`. שניהם טופלו. המדידה הנוכחית:
 
-| מדד | תוצאה |
-|---|---|
-| תלויות מעגליות | **אפס** (גרף הייבוא של `src/smart_kosher` נבנה ידנית במלואו) |
-| הפרות שכבה | **אפס** — אין `domain→adapters`, אין `domain→application`, אין `adapters→application`; `ports/` עלים מוחלטים |
-| lint | `ruff check .` → All checks passed |
-| טסטים | 355 טסטים + 1,369 subtests, כולם עוברים ב-4.19 שניות |
-| קוד מוער | אפס (ERA001 החזיר תוצאה חיובית-שגויה אחת) |
-| השערות התנהגות שנבדקו | 8 מתוך 8 אומתו נכונות; אחת דרשה חידוד ניסוח |
+| מדד | תוצאה | איך נמדד |
+|---|---|---|
+| תלויות מעגליות בליבה | **אפס** | AST על 48 מודולים, 108 קשתות |
+| הפרות שכבה | **אפס** — אין `domain→adapters`, אין `adapters→application` | אותה סריקה |
+| lint | `All checks passed`, exit 0 | `ruff check .` |
+| טסטים | **376 עוברים, 1 מדולג, 1457 subtests** ב-4.34 שניות (אחרי התיקונים: **395** ו-1475) | `pytest -q` |
+| מושגים חוצי-גבול עם שומר | **7 מתוך 10** | אינדקס מלא, ראה F-02 |
+| אינווריאנטים שאומתו | **33 מתוך 33 הוכרעו**: 23 מתקיימים, 8 סוטים, 2 לא ניתנים לאימות | `02-crossref` |
+| קוד מת | 5 שמות top-level, כולם עלים | AST + `grep` ממצה |
 
-ומה שגורע: **תשעה מושגים חוצי-יחידות, ולאחד בלבד יש הצמדה.**
+מה שגורע — שלושה דברים, ואף אחד מהם אינו באג חי:
 
-`tests/test_zman_keys_are_in_sync.py` הוא ההוכחה שהשיטה מוכרת כאן — הוא מפנקס
-18 מפתחות זמנים על פני חמישה משטחים, כולל פרסינג טקסטואלי של JavaScript ושל
-קובץ MicroPython, ובודק גם שמפתחות שהוצאו משימוש נעלמו מכולם. הוא נכתב כי
-"retiring `tset_hakohavim_tsom` meant editing seven files".
+1. **שני אוצרי מילים חוצי-משטחים נשארו בלי שומר** (F-02). מפתחות הזמן קיבלו
+   טסט הצמדה בן שבע מתודות עם נימוק כתוב; `RECURRENCE_TYPES` ו-`ACTION_TYPES`
+   חוצים את אותם שלושה משטחים בדיוק ולא קיבלו כלום.
+2. **סתירה רדומה בין שני כללי GC** (F-01), שהתכנון הכתוב בקוד עצמו מוביל אליה.
+3. **הטסטים והפרודקשן רצים על שני repositories שונים שהם 79% אותו קוד** (F-03).
 
-אותה בעיה בדיוק קיימת בשמונה צירים נוספים — רשימת הישויות, טבלת הניתוב
-REST↔op, אוצר הפעולות, סוגי היעד, מיפוי השגיאות, סף "השעון לא נקבע", חוזה
-הכתיבה העמידה, וכלי הפיתוח — ולאף אחד מהם אין את הטסט המקביל.
-
-**הסיבה המבנית:** אין `CLAUDE.md` בריפו. הכללים קיימים — בהערות-נימוק מצוינות
-בקוד, ב-`docs/`, ובזיכרון הסוכן — אבל אף אחד מהמקומות האלה אינו רשימת כללים
-שאפשר לקרוא לפני שכותבים. לכן כל סשן מגלה מחדש. הקובץ נוצר עכשיו (ראו למטה).
+מה שמצדיק את הציון הגבוה מעבר למספרים: הכללים **נאכפים במכונה, לא בכוונה**.
+`remove_flag(SCROLLABLE)` בשמונה מקומות ובדיקת חומרה שמאמתת אותו; שלושה טסטי
+הצמדה טקסטואליים; טבלת routes שטסט אוכף ששני הטרנספורטים מכסים במלואה. ה-commit
+האחרון (`eda4233`) הסיר `gc.collect()` מחבילת הבדיקות של מוצר א׳ עם הנימוק
+"The suite was the only place on product A still doing it" — כלומר הכללים
+מתוחזקים נגד הקוד שאמור לשמור עליהם.
 
 ---
 
 ## ממצאים לפי עדיפות
 
-### P0 — לפני הקומיט הבא
+### P1 — סתירה רדומה שהתכנון הכתוב מוביל אליה
 
-#### F-01 · `panel_mp/uart_tap.py` אינו מנוהל ב-git, ושני קבצים מנוהלים תלויים בו
-`git status` מראה `?? panel_mp/uart_tap.py` לצד ` M panel_mp/main.py` ו-` M panel_mp/deploy.ps1`.
-- [main.py:31](panel_mp/main.py#L31) — `import uart_tap`, **ללא תנאי**, בראש המודול
-- [main.py:199](panel_mp/main.py#L199) — `uart_tap.maybe_install(gateway, …)`
-- [deploy.ps1:44-46](panel_mp/deploy.ps1#L44-L46) — מוסיף אותו לרשימת המודולים, עם הערה
-  שכתובה שם במפורש: *"uart_tap.py is imported unconditionally by main.py … so
-  leaving it out of this list bricks the boot."*
+#### F-01 · מדיניות ה-GC מותנית בפלטפורמה, לא במוצר
 
-HEAD תקין, עץ העבודה תקין תפקודית. הסיכון הוא הקומיט: שני קבצים מנוהלים ייכנסו,
-הקובץ שהם צריכים לא — ושיבוט נקי לא יעלה. הקובץ עצמו (70 שורות, מתועד היטב) בסדר גמור.
+`CLAUDE.md` מחזיק שני כללים הפוכים בכוונה: במוצר א׳ `gc.collect()` אחרי תחילת
+רינדור משחרר draw buffer ש-core-0 סורק (LoadProhibited boot-loop); במוצר ב׳ זו
+האסטרטגיה הנכונה. המתג שמפריד ביניהם אינו מוצר:
 
-**תיקון:** `git add panel_mp/uart_tap.py`. עלות: אפס.
-
----
-
-### P1 — סחף פעיל עם מסלול כשל שקט
-
-#### F-02 · טבלת הניתוב REST↔op משוכפלת בין שני תהליכים, בלי הצמדה
-[web/routes/__init__.py:45-142](src/smart_kosher/web/routes/__init__.py#L45-L142) מול
-[client/bridge.py:60-165](client/bridge.py#L60-L165).
-ה-docstring מודה בכך ([bridge.py:63-65](client/bridge.py#L63-L65)): *"Mirrors the hub's
-own HTTP adapter (web/routes/__init__.py)"*.
-
-```
-$ grep -rn "rest_to_op\|_KIND_TO_STATUS\|_HTTP_STATUS" tests/
-(אין תוצאות)
+```python
+# src/smart_kosher/web/server.py:16-17
+_IS_MICROPYTHON = hasattr(gc, "mem_free")
 ```
 
-**מסלול הכשל:** נתיב חדש שנוסף ל-`routes/` יעבוד ב-WiFi ויחזיר 404 ב-USB
-([bridge.py:193-194](client/bridge.py#L193-L194)) — בלי שגיאה בשום צד, בערוץ אחד בלבד.
-בנוסף `_KIND_TO_STATUS` ([bridge.py:29-36](client/bridge.py#L29-L36)) משכפל את
-`_HTTP_STATUS` ([routes/__init__.py:18-24](src/smart_kosher/web/routes/__init__.py#L18-L24)) —
-אותם חמישה זוגות.
+```python
+# src/smart_kosher/web/server.py:37-44
+if _IS_MICROPYTHON:
+    # On a no-PSRAM board every request leaves allocation churn behind;
+    @app.after_request
+    async def _collect(req, resp):
+        gc.collect()
+```
 
-**תיקון מוצע:** טסט הצמדה בדיוק בנוסח `test_zman_keys_are_in_sync.py` — לאסוף את
-נתיבי ה-routes ואת מה ש-`rest_to_op` יודע לתרגם, ולדרוש כיסוי הדדי.
+הנימוק בהערה הוא חומרת מוצר ב׳; התנאי הנבדק אמיתי גם על מוצר א׳.
 
-#### F-05 · שכבת עצמי-הערך בדומיין — **אושר למחיקה**
-| מחלקה | צרכני ייצור | צרכני טסט |
+**מי תלוי בזה היום:** איש. `products/panel/device/main.py:218-223` מרכיב `Api`
+ואינו קורא `create_app`. **אבל זה לא נשאר כך לפי התכנון הכתוב:**
+
+```python
+# products/panel/device/brain.py:12-14
+#   * No Microdot/HTTP on the panel today. ... the channel is a
+#     future flip-switch (web.server.create_app(api=api)), not a rewrite.
+```
+
+הפעלת ה-flip-switch הזה רושמת `gc.collect()` אחרי כל תשובת HTTP על הפאנל, אחרי
+שה-UI נבנה. הכשל יהיה LoadProhibited בזמן ריצה, לא שגיאת build, ולא ייראה בשום
+טסט CPython — שם `hasattr(gc,"mem_free")` שקר.
+
+**תיקון:** פרמטר מפורש ל-`create_app` (`collect_after_request=False` כברירת
+מחדל; ה-hub מעביר `True`), כך שההחלטה נעשית בשורש שיודע על איזה מוצר הוא רץ.
+
+### P2 — שומרים חסרים במקומות שהריפו כבר יודע לשמור עליהם
+
+#### F-02 · `RECURRENCE_TYPES` ו-`ACTION_TYPES` בלי מקור ובלי טסט
+
+| משטח | recurrence | action |
 |---|---|---|
-| `Event` | ✅ [planner.py:146](src/smart_kosher/application/planner.py#L146) | ✅ |
-| `Schedule` `Zone` `Endpoint` `Group` | **אפס** | `test_domain.py:43-45,63` בלבד |
-| `Action` | **אפס** | **אפס** |
+| domain | `RECURRENCE_TYPES` 11 (`domain/schedules.py:40`) | `ACTION_TYPES` (`domain/actions.py:5`) |
+| panel | `RECURRENCE_NAMES` 11 + `RECURRENCE_SIMPLE` 7 (`sched_labels.py:26,38`) | on/off ידניים (`schedule_add.py:133,139`) |
+| desktop | `RECURRENCE_LABELS` 11 (`labels.js:24`) | `ACTION_LABELS` (`labels.js:38`) |
 
-נבדק מול השאלה "האם זה שמור ל-HTTP?" — לא. שכבת ה-HTTP כבר בנויה ומכוסה
-(1,041 שורות ב-`test_routes.py`), והמסלול שלה כולו dict-based:
-`routes → api.dispatch → crud_service.create (dict(data)) → repo.upsert →
-validate_entity → validate_zone()`. הוולידציה קורית דרך הפונקציות; המחלקות אינן
-נוגעות במסלול.
-
-**החלטה: למחוק** את `Action`, `Schedule`, `Zone`, `Endpoint`, `Group` ואת `_DeviceModel`;
-להשאיר את `Event`. לעדכן `domain/__init__.py` ו-`tests/test_domain.py`.
-
-#### F-03 + F-08 · רשימת הישויות בחמישה מקומות, אחד מהם מת
-`("zones","endpoints","groups","schedules")` מופיע ב:
-[entities.py:8](src/smart_kosher/domain/entities.py#L8) · [crud_service.py:6](src/smart_kosher/application/crud_service.py#L6) · [api.py:22](src/smart_kosher/application/api.py#L22) · [routes/__init__.py:73](src/smart_kosher/web/routes/__init__.py#L73) (ליטרל בלי שם) · [client/bridge.py:37](client/bridge.py#L37)
-
-ארבעה מהם באותו תהליך. `crud_service.ENTITY_TYPES` הוא **קוד מת מאומת** — grep על
-כל הריפו מחזיר מופע יחיד, ההגדרה עצמה.
-
-**תיקון:** `domain/entities.py:8 CONFIG_ENTITY_TYPES` הוא הבעלים (הוא כבר בונה את
-`ALL_ENTITY_TYPES`). למחוק את `crud_service.ENTITY_TYPES`, ולייבא ב-`api.py`
-וב-`routes/__init__.py`. `client/bridge.py:37` נשאר — תהליך אחר, בלי גישה לחבילה.
-
-**קוד מת נוסף (אפס צרכנים, מאומת ב-grep):**
-[web/responses.py:12-13](src/smart_kosher/web/responses.py#L12-L13) `not_found()`
-(ההתאמות ב-`tests/` הן שמות מתודות, לא קריאות).
-
----
-
-### P2 — כפילות מדודה, בלי מסלול כשל מיידי
-
-#### F-04 · 38 שורות זהות-בבתים בין שני מתאמי אחסון
+```text
+$ grep -rn "ACTION_TYPES|RECURRENCE_TYPES|RECURRENCE_NAMES|RECURRENCE_LABELS|ACTION_LABELS" tests/
+EXIT=1  (אפס התאמות)
 ```
-$ diff <(sed -n '30,67p' src/smart_kosher/adapters/json_repository.py) \
-       <(sed -n '17,54p' src/smart_kosher/adapters/settings_store.py)
-(אפס הבדלים)
+
+**אין סחף חי** — מדידה נתנה 11/11/11 עם `diff=[]`. חסר שומר, לא באג.
+
+**מה ישבר בלעדיו:** `views/schedules.js:75-76,136` בונה את אפשרויות הטופס מתוך
+`RECURRENCE_LABELS`. סוג חדש בדומיין לא יופיע בשולחני כלל; סוג שהוסר יישאר
+כאפשרות ויקבל 400 בשליחה. זה בדיוק הכשל השקט שטסט הזמנים קיים כדי לתפוס.
+
+#### F-03 · `MemoryRepository` הוא 79% עותק, והטסטים רצים עליו — **והוא הסתיר 500 חי**
+
+> **עודכן בביצוע:** הממצא הזה נוסח כ"סיכון סחף" והתברר כהסתרה של באג פעיל בשני
+> המוצרים. הפירוט בסוף המסמך, בסעיף הביצוע. חומרתו בפועל: **גבוהה**.
+
+```text
+json_repository stmts=364  memory_repository stmts=87
+identical normalized lines shared=59 (79% of memory_repository)
+  run of 11 stmts: json_repository.py:179-191  <->  memory_repository.py:23-35
+  run of  7 stmts: json_repository.py:378-384  <->  memory_repository.py:86-92
+  run of  7 stmts: json_repository.py:388-394  <->  memory_repository.py:93-99
 ```
-`_exists`, `_replace`, `_flush_file`, `_sync_filesystem`.
-[settings_store.py:3-6](src/smart_kosher/adapters/settings_store.py#L3-L6) **מצהיר**
-שזה "the same durability contract as the JSON repository" — החוזה משותף ומודע,
-המימוש הועתק. גם לוגיקת ה-tmp/bak חוזרת.
-**סיכון:** תיקון עמידות באחד (טיפול ב-`ENOSPC`, למשל) לא יגיע לשני.
-**תיקון מוצע:** `adapters/_atomic_io.py` פרטי, שני המתאמים מייבאים.
 
-#### F-06 · המספר `2013` בשש נקודות, בשתי משמעויות שאינן קשורות
-**משמעות א׳ — חוק שעון הקיץ (נכון ומתועד):** [israel_time.py:20-21](src/smart_kosher/zmanim/israel_time.py#L20-L21), [views.py:61-65](src/smart_kosher/application/views.py#L61-L65)
-**משמעות ב׳ — סנטינל "ה-RTC מעולם לא נקבע":** [scheduler.py:56](src/smart_kosher/application/scheduler.py#L56) (`MIN_VALID_YEAR` — היחיד שיש לו שם) · [api.py:399](src/smart_kosher/application/api.py#L399) · [device_time.py:13](src/smart_kosher/application/device_time.py#L13) · [pcf8563.py:83](src/smart_kosher/adapters/pcf8563.py#L83) · [panel_mp/main.py:97](panel_mp/main.py#L97) · [panel_mp/settime.py:36](panel_mp/settime.py#L36)
+- **פרודקשן** מריץ `JsonRepository` בלבד (panel brain, hub main, hwtest).
+- **רוב כיסוי ההתנהגות** רץ על `MemoryRepository` — 9 קבצי טסט, ובהם
+  `test_api`, `test_routes`, `test_serial`, `test_web`, `test_zigbee_gateway`.
 
-[scheduler.py:54-55](src/smart_kosher/application/scheduler.py#L54-L55) מודע ומתעד
-את השכפול, אך `MIN_VALID_YEAR` אינו נצרך באף אחד מהחמישה.
-**הסיכון הייחודי:** שני מושגים חולקים ערך במקרה — עריכה טקסטואלית של האחד תזלוג לשני.
+תיקון התנהגות שיוחל על אחד ולא על השני יעבור את ה-suite בירוק בעוד המכשיר
+מתנהג אחרת.
 
-#### F-07 · `_VALID_ACTIONS` משכפל את `ACTION_TYPES`
-[control_service.py:15](src/smart_kosher/application/control_service.py#L15) מול
-[actions.py:5](src/smart_kosher/domain/actions.py#L5). באותו קובץ,
-`_TARGET_TO_COLLECTION` ([control_service.py:10-13](src/smart_kosher/application/control_service.py#L10-L13))
-מגדיר עצמאית גם את `TARGET_TYPES`. שירות שכותב מחדש אוצר-מילים של הדומיין במקום לצרוך אותו.
+### P3 — דיוק ותחזוקה
 
----
+| # | ממצא | ראיה |
+|---|---|---|
+| F-04 | חמישה שמות top-level ללא צרכן | `ui_home.py:39`, `astronomy.py:71,245,269`, `reactive.py:114` |
+| F-05 | `CLAUDE.md` הצהיר 371+1455; בפועל 376+1457+1 skipped | `pytest -q` |
+| F-06 | `pyrightconfig.json:2` על 3.14 מול ליבה נעולה על 3.8 | מול `pyproject.toml:10,34` |
+| F-08 | `uart_codec` קורא לכשל prefix ‏`bad_crc`; המפרט וה-C אומרים `bad_frame` | `uart_codec.py:33,36` מול `UART_PROTOCOL.md:31-32` ו-`link.c:101-110` |
+| F-11 | `CLAUDE.md` לא תיעד שמוצר ב׳ מושהה ובלי scheduler | `hub/device/main.py:3-17` |
 
-### P3 — ניקיון
-
-- **F-09 · יישור סגנון (אושר):** [uart_codec.py](src/smart_kosher/adapters/uart_codec.py)
-  הוא הקובץ היחיד ב-`src/` (מתוך ~4,900 שורות) עם f-strings (`:23,36,40`) ועם type
-  annotations (`:9,26`). להמיר ל-`.format()` ולהסיר את ה-annotations.
-- **F-10 · שאריות תיעוד:** [test_uart_codec.py:1](tests/test_uart_codec.py#L1) מזכיר
-  `UartProtocolCodec` — סמל שאינו קיים בשום מקום בריפו.
-  [device_gateway.py:3-5](src/smart_kosher/ports/device_gateway.py#L3-L5) מתאר את
-  מיפוי ה-ACK כמשימה עתידית, בעוד `_ack_status` כבר מממש אותו והקושחה כבר לא
-  מחזירה `"ok"` (לפי `UART_PROTOCOL.md`, `ok` הוא legacy מקושחה < 0.8.0).
-- **F-11 · כפילות בכלי הפיתוח:** `find_panel()` זהה-בבתים ב-`run_hwtest.py:28-33`,
-  `run_hwtest_ui.py:27-32`, `run_hwtest_zmanim.py:34-39`; `mpremote()` ו-`CH340_VID_PID`
-  דומים. `panel_mp/dev_common.py` כבר קיים כמודול המשותף של התיקייה.
-- **S-03 · `pyrightconfig.json`** מצהיר `"pythonVersion": "3.14"` בעוד
-  `pyproject.toml:11` קובע `>=3.8` ו-`:32` קובע `target-version = "py38"`, והליבה
-  חייבת לרוץ על MicroPython. pyright גם אינו מותקן, כך שהקובץ אינו נאכף היום.
-  **לא אושר לשינוי — נשאר כהמלצה פתוחה.**
+**על F-08:** הצד ה-C מיישם את המפרט נכון ויש לו טסט host ייעודי; רק צד Python
+חולק, והטסטים מקבעים את הסטייה (`test_uart_codec.py:81,86`). הנזק אבחוני בלבד —
+`zigbee_gateway.py:205` תופס `ValueError` גנרי — אבל בעיית מסגור שמדווחת כבעיית
+checksum שולחת את מי שמנפה שגיאות לכיוון הלא נכון.
 
 ---
 
-### S-02 · מעטפות תגובה שונות בשני ערוצים (לא סווג כפגם)
-HTTP מחזיר `{"ok":false,"error":…}` וזורק את `kind` (הוא מקודד בקוד הסטטוס);
-serial מחזיר `{"ok":false,"kind":…,"error":…}`. `client/bridge.py:29-36` ממיר בחזרה.
-**זה מגן על עצמו** — בלקוח HTTP קוד הסטטוס *הוא* הסיווג — אבל זו הסיבה
-ש-`_KIND_TO_STATUS` קיים, כלומר חצי מ-F-02. מתועד כהחלטה, לא כממצא.
+## תוכנית תיקון — **בוצעה במלואה**
 
----
+בוצעה בסדר עולה של סיכון, כל שלב מאומת לפני הבא.
 
-## תוכנית תיקון
-
-| # | פעולה | קבצים | עלות |
+| סדר | משימה | מה נעשה | ממצא |
 |---|---|---|---|
-| 1 | `git add panel_mp/uart_tap.py` | 1 | דקה |
-| 2 | מחיקת `Action`/`Schedule`/`Zone`/`Endpoint`/`Group`/`_DeviceModel` | `domain/actions.py`, `domain/devices.py`, `domain/schedules.py`, `domain/__init__.py`, `tests/test_domain.py` | ~שעה |
-| 3 | איחוד רשימת הישויות ל-`CONFIG_ENTITY_TYPES` + מחיקת `ENTITY_TYPES` ו-`not_found()` | `crud_service.py`, `api.py`, `routes/__init__.py`, `responses.py` | ~שעה |
-| 4 | טסט הצמדה ל-`rest_to_op` ↔ `register_all` | `tests/test_client_bridge_sync.py` (חדש) | ~שעתיים |
-| 5 | חילוץ `adapters/_atomic_io.py` | 3 קבצים | ~שעה |
-| 6 | `MIN_VALID_YEAR` כמקור יחיד לסנטינל השעון | 5 קבצים | ~שעה |
-| 7 | `control_service` מייבא `ACTION_TYPES` ו-`TARGET_TYPES` מהדומיין | 1 | 15 דק׳ |
-| 8 | יישור `uart_codec.py` ל-`.format()`, תיקון שתי שאריות התיעוד | 3 | 30 דק׳ |
-| 9 | חילוץ `find_panel`/`mpremote` ל-`dev_common.py` | 4 | 30 דק׳ |
+| 1 | `pythonVersion: "3.8"` | אומת מראש שכל 28 קבצי ה-Python שמחוץ לליבה נותחים תחת 3.8 (`FAIL_UNDER_PY38=0`), ולכן אין שגיאות שווא | F-06 |
+| 2 | `bad_frame` ב-codec | שני מסלולי prefix שונו + שני assertions בטסטים. `test_bad_crc_raises` נשאר `bad_crc` — שם ה-CRC באמת שגוי | F-08 |
+| 3 | הסרת קוד מת | `_nav_cb`, `utc_sun_time`, `hms_to_minutes`, `_jd_from_jc`. אומת שאף אחד אינו ב-`__all__` ואינו מיוצא מ-`zmanim/__init__.py` | F-04 |
+| 4 | טסט הצמדה לאוצר המילים | `tests/test_schedule_vocab_is_in_sync.py`, 6 טסטים. אומת במוטציה שהוא תופס את ארבעת כיווני הסחף | F-02 |
+| 5 | `collect_after_request` | ברירת מחדל `None` = התנהגות היסטורית (אפס תזוזה לקורא קיים), הרכזת מעבירה `True` במפורש, 3 טסטים חדשים | F-01 |
+| 6 | חוזה הרפוזיטורי | `tests/test_repository_contract.py` — **וכאן התגלה באג חי**, ראה להלן | F-03 |
 
-**כלים שכדאי להתקין** (אף אחד מהם לא היה זמין; הכול נעשה ידנית + ruff בכללים מורחבים):
-`pip install vulture` היה תופס את פריט 3 לבדו; `npx jscpd` היה תופס את פריט 5 לבדו.
-חסרים גם `pyright`/`mypy`, `pydeps`, `cppcheck`, ו**`gcc`** — שבלעדיו
-`experiments/zigbee_probe/h2_coordinator_firmware/host_test/run.sh` לא ניתן להרצה כאן.
+**על משימה 5:** התוכנית המקורית אמרה "ברירת מחדל `False`, וה-hub מעביר `True`",
+וזה היה מסוכן: hub שלא יקבל `True` מאבד בשקט את ה-GC שמחזיק לו את ה-heap, ואף
+טסט לא היה תופס — הענף מת ב-CPython, ומוצר ב׳ מושהה ובלי חומרה לאימות. `None`
+מבטל את הסיכון הזה. הרווח הצדדי: הענף הפך **בר-בדיקה לראשונה**, כי אפשר לכפות
+`True` על CPython.
+
+**על משימה 3:** `computed` (`reactive.py:114`) **נשאר** — מתועד ב-`reactive.py:6`
+כחלק מה-API של ספריית הסיגנלים שכל ה-UI של הפאנל בנוי עליה, ועולה שש שורות. אם
+גם באודיט הבא לא יהיה לו צרכן, להסיר.
+
+---
+
+## מה שהתגלה בביצוע — 500 חי בשני המוצרים
+
+משימה 6 נועדה להיות "טסט שמקבע חוזה". פרוב שהשווה את שני המימושים מצא שבע סטיות,
+ואחת מהן הגיעה עד המשתמש.
+
+**השורש** (`json_repository.py:190-195`): `upsert` תפס את ה-`ValueError` של
+הדומיין ורים אותו מחדש כ-`RepositoryValidationError`, ש-**ירש מ-`Exception`
+ולא מ-`ValueError`**. `api.py:dispatch` ממפה `ValueError`→`bad_request` וכל השאר
+→`internal`. לכן:
+
+| בקשה | על `MemoryRepository` (הטסטים) | על `JsonRepository` (המכשיר) |
+|---|---|---|
+| `POST /api/zones {}` | 400 | **500** |
+| `POST /api/zones {"name":""}` | 400 | **500** |
+| `POST /api/zones {"name":123}` | 400 | **500** |
+| תזמון עם `recurrence_type` לא מוכר | 400 | **500** |
+| תזמון עם `action_type: toggle` | 400 | **500** |
+
+כלומר **כל שדה שנדחה בוולידציה החזיר "internal error" בשני המוצרים**, במקום 400
+עם הודעת השגיאה האמיתית — והסוויטה הייתה ירוקה לאורך כל הדרך, כי היא בונה את
+הלקוחות שלה על המימוש שאינו מבצע את ההמרה הזאת. זה בדיוק המנגנון ש-F-03 תיאר.
+
+**התיקון:** `class RepositoryValidationError(RepositoryError, ValueError)`.
+`RepositoryCorruptionError` **לא** קיבל את זה בכוונה — אחסון פגום הוא תקלה
+פנימית ו-500 הוא התשובה הנכונה לה. אומת: הטסט החדש נכשל ב-12 טענות בלי התיקון
+ועובר איתו.
+
+**מה שנשאר סטייה מקובלת:** מספר ה-revision מתחיל מבסיס שונה בשני המימושים.
+`planner.py:74-82` משווה אותו רק לשינוי, אף פעם לא לערך מוחלט, ולכן הטסט מקבע
+"משתנה במוטציה" ולא ערך.
+
+### והתיקון עצמו כמעט הפיל את שני הלוחות
+
+הניסוח הראשון היה `class RepositoryValidationError(RepositoryError, ValueError)` —
+ירושה מרובה. הוא עבר את כל 395 הטסטים. על החומרה (AtomS3, MicroPython 1.24.1):
+
+```text
+MI_DEFINE: FAILS -> TypeError multiple bases have instance lay-out conflict
+SINGLE_CATCH_AS_VALUEERROR: yes
+```
+
+השגיאה קורית בזמן **הגדרת** המחלקה, כלומר ב-import של `json_repository` — קובץ
+ששני שורשי המוצר מייבאים. כלומר: **הליבה לא הייתה נטענת ואף לוח לא היה עולה**,
+בעוד הסוויטה ב-CPython ירוקה לחלוטין. זו בדיוק הקטגוריה שכללי הניידות
+ב-`CLAUDE.md` קיימים בשבילה, וירושה מרובה לא הייתה בהם.
+
+**מה נעשה:** הטיפוס יורש מ-`ValueError` בלבד — אותה צורה שהדומיין כבר משתמש בה
+(`DeviceValidationError`, `ScheduleValidationError`). אומת שאיש אינו תופס
+`RepositoryError` כבסיס: הוא נזרק ישירות פעם אחת, לתיקייה שאי אפשר ליצור.
+
+**והשומר:** `tests/test_core_is_micropython_safe.py` סורק ב-AST את כל מה שנצרב
+ללוח ואוכף חמישה כללים שאין ל-CPython דרך להיכשל עליהם — ירושה מרובה, f-strings,
+annotations, imports אסורים ו-`await` בתוך comprehension. אומת במוטציה: החזרת
+הצורה השוברת מייצרת כשל שמצביע על `json_repository.py:26` בשמו.
+
+**ואומת מקצה לקצה על החומרה.** הליבה נצרבה ל-AtomS3, ושתי בקשות נשלחו לערוץ
+ה-USB — בדיוק המסלול שהחזיר 500:
+
+```text
+zones.create      -> kind=bad_request  "name must be a non-empty string"
+schedules.create  -> kind=bad_request  "toggle is not allowed in schedules; use on or off"
+```
+
+לפני התיקון שתיהן היו מסווגות `internal`.
 
 ---
 
 ## חוקים שהוצע לשנות או להסיר — וההכרעה
 
-### R-A · `extend-exclude = ["experiments"]` — **ההצעה נמשכה, היא הייתה שגויה**
+חמישה אינווריאנטים הועלו בשלב 5. ההכרעה שלך: "תעשה מה שמומלץ" — כלומר כל
+חמשת השינויים המומלצים אושרו ובוצעו ב-`CLAUDE.md`.
 
-הצגתי במקור טענה ש-"~1,900 שורות C מוחרגות מ-lint בגלל מיקומן". בדיקה הפריכה אותה:
-
-- **ruff הוא לינטר Python בלבד** — קוד ה-C מעולם לא היה בתחולת ההחרגה.
-- ה-Python שתחת `experiments/` היה 1,568 שורות, **וכולו באמת סקריפטי חקירה/ארכיון**.
-  (אחרי מחיקת `_archive/crowpanel_ui/` ב-2026-08-12: 1,299 שורות, כולן `zigbee_probe/tools/`.)
-- ביטול ההחרגה היה מניב **6 בעיות**: 5 מיון-imports + `E731` אחד.
-
-`extend-exclude = ["experiments"]` **מכוון נכון ונשאר כפי שהוא.**
-
-### R-B · הסתירה בתיאור `experiments/zigbee_probe/` — **הוכרע: לתקן את התיאור**
-
-מה שכן נשאר מהממצא, בלי השלכת האכיפה:
-- [README.md:3](experiments/zigbee_probe/README.md#L3) — "**Disposable** hardware proof-of-life code"
-- [README.md:10-11](experiments/zigbee_probe/README.md#L10-L11) — "It is the **current source of truth** for hardware behavior"
-- [hardware_audit.md:5-7](docs/hardware_audit.md#L5-L7) — קוד חומרה בדוק "should be promoted from `experiments/`"; התנאי התקיים (Gate 2+3), הקידום לא בוצע.
-
-הסיכון הוא **גילוי**, לא איכות: מי שקורא את הריפו עלול לא להבין שזו הקושחה החיה
-של מוצר נמכר, ושכל שינוי בפרוטוקול חייב לגעת בה.
-
-**הוכרע:** לתקן את התיאור, לא להזיז קוד. לשנות את `README.md:3` כך שלא יקרא
-"disposable", ולעדכן את `hardware_audit.md:5-7` כך ש-`zigbee_probe/` מוצהר כמיקום
-הקבע של הקושחה ו-`_archive/` כארכיון. אפס שינויי נתיבים.
-
-### R-C · האינווריאנט על `gc.collect()` — **נוסח מחדש כתלוי-חומרה**
-
-הזיכרון ניסח זאת כאיסור גורף. הקוד מדויק יותר —
-[brain.py:15-20](panel_mp/brain.py#L15-L20): *"The AtomS3 has no PSRAM and no RGB
-scanout, so there that strategy is **correct**; here it is forbidden."*
-ו-[web/server.py:37-45](src/smart_kosher/web/server.py#L37-L45) אכן מפעיל
-`gc.collect()` — בכוונה, למוצר ב׳.
-
-איסור גורף ב-`CLAUDE.md` היה מונע תיקון נכון על מוצר ב׳. **נכתב עם התנאי.**
-
-### R-D · `pyrightconfig.json` 3.14 מול יעד 3.8 — **לא הוכרע, נשאר פתוח**
-לא אושר לשינוי. מופיע כהמלצה ב-P3.
-
-### R-E · אין `CLAUDE.md` — **הוכרע: ליצור, בהיקף מינימלי**
-שלב 6ב במשימה הניח קובץ קיים; בפועל זו הייתה יצירה. נוצר `CLAUDE.md` בשורש,
-מכיל **רק** אינווריאנטים שאומתו מול הקוד ואושרו — כל שורה בו מגובה בראיה מהאודיט.
-
----
-
-## דו"ח פערים — מה לא נבדק לעומק, ולמה
-
-הפנקס מנה **34 יחידות**, מתוכן 2 סווגו `n-a` מראש (פונטים בינאריים, דאטה-שיטים
-של יצרנים). כל 32 הנותרות קיבלו סטטוס; אפס נשארו `unreviewed`.
-מתוכן **19 נקראו לעומק** ו-**13 נסקרו חלקית**. הנה הפערים, בכנות:
-
-| יחידה | מה נבדק | מה **לא** נבדק | למה |
-|---|---|---|---|
-| **E1–E3 · קושחת H2 (C, ~1,900 שורות)** | הכותרות, סולם ה-ACK, גרסאות, התאמה ל-`UART_PROTOCOL.md` | הלוגיקה הפנימית של `zb.c` (1,239 שורות), `txn.c`, `link.c`; טסטי `host_test` **לא הורצו** | **אין `gcc` בסביבה** ואין `cppcheck`. זה הפער המשמעותי ביותר. |
-| **A5 · `zmanim/`** | מבנה, תלויות, קונבנציות, `CANDLE_OFFSET_MINUTES`, מורכבות | נכונות מתמטית של `hebrew_cal.py` (516 שורות) ו-`astronomy.py` | מכוסה מבחוץ: `test_zmanim_reference.py` מול טבלת אמת מ-KosherJava. אודיט ארכיטקטוני אינו הכלי לאמת חישוב אסטרונומי. |
-| **B2–B4 · UI של הפאנל (~2,900 שורות)** | תבניות (`open`/`_build`/`_rebuild`), הגשר, שורש ההרכבה, `store`/`reactive` | הלוגיקה של כל עמוד בנפרד | LVGL, לא ניתן להרצה מחוץ ללוח. מכוסה ע"י `hwtest_ui.py` (26/26 על חומרה) שאינו חלק מ-pytest. |
-| **C2–C4 · JS של הלקוח (~1,600 שורות)** | `labels.js` (בגלל ציר הזמנים), מבנה המודולים, `index.html` | לוגיקת התצוגה ב-`views/*.js`, `style.css` (657 שורות) | אין כלי JS מותקן (`jscpd`/`madge`), אין package.json, ואין שום כיסוי טסטים. |
-| **E4 · כלי probe (~1,420 שורות)** | תפקיד, החרגת lint | התוכן | מוצהרים כסקריפטי חקירה — וזה אומת כנכון. |
-| **F · טסטים** | מיפוי לכל יעד, הורצו במלואם | לא נבדקה **איכות** הטענות בכל טסט | 355 עוברים; ביקורת טסט-אחר-טסט היא משימה נפרדת. |
-| **D1, G1** | ההרכבה, ה-imports, `SETTINGS_DEFAULTS` | `connect_wifi()`, `GenerateGolden.java` | היקף. |
-
-**מה שהפערים האלה עלולים להסתיר:** באג לוגי בתוך `zb.c`, שגיאת חישוב זמנים שטבלת
-האמת לא כיסתה, וכפילות בתוך `views/*.js`. שום ממצא שנרשם כאן אינו תלוי בהם —
-כל ממצא מגובה בפלט כלי או ב-`file:line` שנקרא בפועל.
-
----
-
-## מה שנבדק ונמצא תקין (ראוי לציון)
-
-- **`SETTINGS_DEFAULTS`** — הסחף ההיסטורי ב-`candle_offset` (18 מול 20, שתי שעות
-  כניסת שבת לאותו לוח זמנים) תוקן, **ומוחזק** בכל ארבעת שורשי ההרכבה.
-- **סולם ה-ACK** — עקבי שורה-בשורה בין `ports/device_gateway.py`, `_ack_status`,
-  `_STATUS_RANK`, ה-`Executor`, ו-`docs/UART_PROTOCOL.md`. המושג המתוחזק ביותר בריפו.
-- **הפרדת `_states` מ-`_expected`** ב-`zigbee_gateway.py:107-115` — הבסיס לכלל
-  "המוח מכבד התערבות ידנית", אכוף במבנה ולא רק בכוונה.
-- **צפיפות התיעוד ב-`application/`** — הערות שמסבירות *למה*, כולל תיאור הבאג
-  ההיסטורי שהכלל מונע. זה מה שאיפשר את רוב האודיט הזה.
-
----
-
-## מה בוצע בפועל
-
-בוצע ב-2026-08-12, אחרי אישור הממצאים. ההנחיה המנחה הייתה **מקור אחד ששני
-הצדדים משתמשים בו**, ולא טסט שמצמיד שני עותקים — כלומר לתקן את המבנה, לא לשמור
-על הכפילות ולהתריע כשהיא סוטה.
-
-| # | ממצא | מה נעשה |
+| חוק | הראיה נגדו | ההכרעה |
 |---|---|---|
-| F-01 | `uart_tap.py` לא מנוהל | `git add panel_mp/uart_tap.py` |
-| F-02 | טבלת ניתוב משוכפלת | **`web/route_table.py` חדש** — 27 routes כנתונים. `web/routes/register_all` רושם ממנו; `client/bridge.rest_to_op` פותר מולו. `HTTP_STATUS` עבר לשם גם הוא, כך ש-`_KIND_TO_STATUS` בלקוח נעלם |
-| F-03 | קוד מת | נמחקו `crud_service.ENTITY_TYPES` ו-`web/responses.not_found()` |
-| F-04 | 38 שורות זהות | **`adapters/_atomic_io.py` חדש** — `exists`/`replace`/`flush_file`/`sync_filesystem`; שני המתאמים מייבאים |
-| F-05 | מחלקות דומיין מתות | נמחקו `Action`, `Schedule`, `Zone`, `Endpoint`, `Group`, `_DeviceModel`. `Event` נשאר (נצרך ב-`planner.py:146`) |
-| F-06 | 2013 בשש נקודות | **`ports/clock.py:MIN_VALID_YEAR`/`MAX_VALID_YEAR`** — נצרך ב-scheduler, api, device_time, pcf8563, panel_mp/main, panel_mp/settime. ה-2013 של חוק שעון הקיץ נשאר בנפרד, בכוונה |
-| F-07 | `_VALID_ACTIONS` משוכפל | `control_service` מייבא `ACTION_TYPES` ו-`TARGET_COLLECTIONS` מהדומיין |
-| F-08 | רשימת ישויות ×5 | `domain/entities.CONFIG_ENTITY_TYPES` הוא הבעלים; `api.py` ו-`route_table.py` מייבאים. הליטרל ב-routes ובלקוח נעלם |
-| F-09 | סגנון `uart_codec` | הומר ל-`.format()`, ה-annotations הוסרו |
-| F-10 | שאריות תיעוד | `UartProtocolCodec` תוקן; ההערה ב-`ports/device_gateway.py` מתארת את המצב בפועל |
-| F-11 | `find_panel` ×3 | **`panel_mp/run_common.py` חדש** (host-side, לא נפרס). שלושת ה-runners מייבאים |
-| S-03 | pyright 3.14 | **לא שונה** — לא אושר. נשאר פתוח |
-| R-B | סתירת `experiments/` | `_archive/README.md` נכתב מחדש כרשומת שושלת; `experiments/_archive/crowpanel_ui/` נמחק |
+| "כל `create_task` חייב הפניה חיה" | 13/15 מקיימים. השניים שלא — `zigbee_gateway.py:633` (probe יחיד, `_probe_inflight` מתאפס ב-`finally`) ו-`hub/main.py:144` (sleep ואז `machine.reset`) — קצרים וסופיים, ובuasyncio תור הריצה מחזיק הפניה חזקה | **צומצם** ל"משימה שחורגת מחיי הקורא". אפס שינויי קוד; הכלל עדיין תופס את הכשל האמיתי — משימה שהקורא נוטש |
+| "טסט הצמדה רק כשזה בלתי אפשרי (שפות שונות)" | `sched_labels.py` הוא Python ו-import ממנו אפשרי — ובכל זאת `test_zman_keys_are_in_sync.py:81-84` **אוכף** שיישאר בלי import, כי הוא נטען לפני שהתצוגה קיימת | **תוקן** ל"רק כשה-import חסום — שפה אחרת, או אילוץ מכשיר מתועד" |
+| `domain ← application ← adapters/web/serial_channel` | `adapters` פונה רק ל-`domain`/`ports` ולעולם לא ל-`application`; שכבת `data` חסרה בניסוח לגמרי | **תוקן** לפי הגרף הנמדד. כל האיסורים נשארו כלשונם — הם אומתו נכונים |
+| "כל `validate_*` ממיר ל-`XValidationError`" | 6/8. `validate_json` (primitive פנימי) ו-`validate_entity` (מנתב לוולידטור שכבר מרים נכון) מרימים `ValueError` עירום | **צומצם** ל"כל validator של **ישות**" |
+| — (לא היה קיים) | שני כללי ה-GC ההפוכים נשענים על ביטוי שנכון בשני המוצרים | **נוסף** אינווריאנט: בחירת מדיניות GC שייכת לשורש ההרכבה, לא לזיהוי פלטפורמה |
 
-**מפלי כפילות שנסגרו:** רשימת הישויות 5→1, טבלת הניתוב 2→1, מיפוי `kind`→סטטוס
-2→1, עוזרי הכתיבה האטומית 2→1, סנטינל השעון 6→1, אוצר הפעולות 2→1,
-`find_panel` 3→1.
+**חוק אחד נבחן והושאר כלשונו:** `MIN_VALID_YEAR` ו-2013 של חוק שעון הקיץ —
+"שני מושגים שחולקים מספר במקרה". אומת: הסנטינל מוגדר ב-`ports/clock.py` ומיובא
+בארבעה מקומות; חוק ה-DST מחזיק literal נפרד ב-`israel_time.py:19-25` ואינו מייבא
+אותו. ההפרדה מכוונת ונשמרת.
 
-**כיסוי חדש:** `tests/test_route_table.py` (15 טסטים, 81 subtests) מאמת את
-התכונה עצמה — שכל route בטבלה נרשם ע"י הרכזת **וגם** נפתר ע"י הלקוח. זו בדיקה
-חזקה יותר מהשוואת שני מימושים זה לזה, שהיא מה שטסט לפני הריפקטור היה נאלץ לעשות.
-`client/` קיבל בכך כיסוי טסטים ראשון.
+---
 
-**אימות:** `ruff check .` נקי · **371 טסטים + 1,455 subtests עוברים**
-(לפני: 355 + 1,369).
+## דו״ח פערים — מה לא נבדק לעומק, ולמה
 
-**שינוי אריזה שדורש תשומת לב:** הלקוח מייבא עכשיו את `smart_kosher`, ולכן
-`client/build.ps1` קיבל `--paths src` ו-`client/app.py` מוסיף את `src` לנתיב
-כשהוא לא frozen. **ה-exe לא נבנה מחדש ולא נבדק כאן** — זה הפער היחיד שנשאר.
+כל 189 השורות בפנקס קיבלו סטטוס `reviewed`, אבל עומק הבדיקה לא היה אחיד:
+
+| מה | עומק שהושג | למה לא יותר |
+|---|---|---|
+| ~~`firmware/h2_coordinator/**`~~ | ~~קריאת קוד בלבד~~ → **טסטי ה-host הורצו: 1234 בדיקות, 0 כשלים** | **הפער הזה נסגר, והרישום המקורי היה שגוי.** הסריקה בדקה את ה-PATH של Windows; שרשרת הכלים חיה ב-WSL, ושם `gcc 15.2`, `make`, `cmake` ו-`~/esp/esp-idf` כולם קיימים. `build_h2_coordinator.ps1:54` אומר את זה במפורש — הוא קורא `wsl bash -lc "source ~/esp/esp-idf/export.sh ..."`. ה-build המלא של ה-firmware עדיין לא הורץ (אין בו שינוי) |
+| ~~התאמת MicroPython של הליבה~~ | **נסגר: הליבה המעודכנת נצרבה ל-AtomS3 ועלתה נקי.** תחביר 3.8 על 83 קבצים, חמישה כללים שהפכו לטסט (`tests/test_core_is_micropython_safe.py`), ירושה מרובה אומתה על החומרה, וכל החבילה קומפלה ל-`.mpy` ונטענה | — |
+| `products/panel/hwtest/**` ו-`products/*/host/**` | קריאה בלבד | דורש חומרה מחוברת |
+| `data-sheets/**` (9 קבצים) | תפקיד, provenance, צרכנים | מסמכי ייחוס של ספק; ה-PDFs מוחרגים מ-git |
+| `products/panel/device/fonts/*.bin` (5) | תפקיד, גודל, מי צורך, איך נפרסים | נכסים בינאריים |
+| `tests/data/zmanim_golden.csv.gz` | provenance (מחולל Python+Java), אופן הצריכה | ~מיליון ערכים; אומת דרך הטסט שצורך אותו |
+| סריקת זמנים מלאה | ברירת המחדל היא מדגם | הסריקה המלאה מותנית ב-`ZMANIM_FULL_REFERENCE` |
+| `products/hub/**` | **נבדק בזמן ריצה על החומרה** — בוט נקי, `serial channel ready`, 103KB heap פנוי, ו-`status.get` עונה | מוצר ב׳ עדיין מושהה ובלי scheduler; ה-NanoC6 לא היה מחובר, ולכן `link_down: true` והרדיו עצמו לא נבדק |
+
+**מגבלת תהליך שנרשמה:** ה-suite הורץ פעם אחת בלבד. אף שכל `TEMP`, `TMP`,
+`TMPDIR`, `--basetemp` ו-cache הופנו לאזור הטיוטה, כמה טסטים מגדירים בעצמם
+נתיבי עבודה תחת `tests/` (`test_application.py:95-143`, `test_storage.py:14-58`,
+`test_panel_scheduler.py:20-31`). הם ניקו אחריהם ולא נשאר שינוי, אבל הייתה נגיעה
+זמנית מחוץ לאזור הטיוטה, ולכן לא הורץ שוב.
+
+---
+
+## מה שנבדק ונמצא תקין
+
+ראוי לציון, כדי שלא ייבדק שוב מאפס:
+
+- **סמנטיקת המסירה שלמה.** `accepted_by_h2` אינו ב-`EXECUTION_SUCCESS_STATUSES`
+  ולכן אינו נכנס ל-journal ומנוסה שוב; `confirmed_by_device` כן. מיפוי ה-ACK
+  תואם לטבלת הפרוטוקול.
+- **הכלל שהמוח מכבד התערבות ידנית מחזיק.** חיפוש כל הכתיבות ל-`_states` מצא
+  assignment יחיד — `_on_state` (`zigbee_gateway.py:476-485`), שנקרא רק
+  מ-`attribute_report` ומ-ACK של `read_attr`. פקודות כותבות ל-`_expected` בלבד.
+- **`toggle` חסום בתזמון** אחרי ולידציית action, ומותר בשליטה ידנית.
+- **החלון והשעון:** `(start_exclusive, end_inclusive]` בדקות UTC שלמות; שני
+  ה-RTC adapters קוראים וכותבים UTC; אין שמירת "נראה לאחרונה", ו-boot catch-up
+  וטיק רגיל עוברים שניהם ב-`RecoveryService.recover`.
+- **`SETTINGS_DEFAULTS` מקור יחיד** ושלושת השורשים מוסיפים `city` בלבד.
+- **טבלת ה-routes מקור יחיד**, 27 שורות, ושני הטרנספורטים מכוסים בטסט.
+- **איסור הגלילה נאכף במכונה** — `remove_flag(SCROLLABLE)` בשמונה מקומות
+  ובדיקת חומרה ב-`hwtest_ui.py:312,344`.
+- **ה-SCC בן 11 המודולים ב-`products/panel/device` אינו פגם** — הקשתות deferred
+  בכוונה בתוך פונקציות, דפוס ה-lazy import הסטנדרטי לחיסכון בזיכרון.
+- **היעדר `kind` ב-envelope של HTTP אינו סתירה** — ל-HTTP יש status codes,
+  ול-serial אין, וה-bridge ממיר kind→status כך ששני הטרנספורטים מגיעים ללקוח
+  באותה צורה.
