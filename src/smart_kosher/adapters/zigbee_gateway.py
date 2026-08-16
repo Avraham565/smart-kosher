@@ -639,9 +639,18 @@ class ZigbeeGateway(DeviceGateway):
         while it is down. The ping's ack (like any inbound frame) clears
         the breaker."""
         while True:
-            await self.ping()
-            if not self._down:
-                self.pump_reporting()
+            try:
+                await self.ping()
+                if not self._down:
+                    self.pump_reporting()
+            except Exception as exc:
+                # The heartbeat must outlive anything it calls. Both branches
+                # reach _write_cmd -> self._uart.write, which is a real raiser
+                # on a UART fault, and on product A this task is one of seven
+                # in a single gather (products/panel/device/main.py): a raise
+                # here used to end main() and leave the panel rendering a dead
+                # frame. Log and take the next tick.
+                self._log("zigbee watchdog error:", exc)
             await asyncio.sleep(
                 (_WATCHDOG_DOWN_MS if self._down else _WATCHDOG_UP_MS)
                 / 1000)

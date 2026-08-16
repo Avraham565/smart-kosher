@@ -171,12 +171,21 @@ async def _zigbee_reader(gateway, uart):
     process_line, which resolves pending commands and heals the registry."""
     reader = asyncio.StreamReader(uart)
     while True:
-        line = await reader.readline()
-        if line:
-            try:
+        try:
+            line = await reader.readline()
+            if line:
                 gateway.process_line(line)
-            except Exception as exc:
-                print("zigbee line error:", exc)
+        except Exception as exc:
+            # readline() is inside the try, not just process_line: it is the
+            # call that touches the UART, and a raise here used to escape into
+            # the gather and end main() -- leaving the RGB DMA still scanning
+            # out a frozen frame (host/clean_board.py), a board that looks
+            # alive and is dead.
+            print("zigbee line error:", exc)
+            # A UART that faults on every read would otherwise spin this loop
+            # without ever yielding, and on one cooperative loop that starves
+            # LVGL and the scheduler too -- the same freeze by another door.
+            await asyncio.sleep(0.1)
 
 
 async def _run(composed, gateway, uart):
@@ -194,7 +203,20 @@ async def _run(composed, gateway, uart):
           "@", display.PCLK_HZ // 1_000_000,
           "MHz; brain in-process; H2 on UART", _ZIGBEE_UART_ID,
           "; scheduler every", scheduler.TICK_SECONDS, "s")
-    await asyncio.gather(pump, status, clockt, devicest, reader, heart, sched)
+    # The net under the nets. Every loop above now guards itself, and that is
+    # the real fix; this only decides what a raise that got past all of them
+    # costs. Without return_exceptions the first one unwinds through gather,
+    # main() returns, and the RGB DMA keeps scanning out the last frame forever
+    # -- a wall panel showing rooms and buttons that answers nothing. With it,
+    # the other six keep running. Note gather returns only once *all* seven
+    # have ended, which for seven infinite loops should be never, so the report
+    # below is the post-mortem, not the alarm.
+    names = ("lvgl pump", "status", "clock", "devices", "zigbee reader",
+             "zigbee watchdog", "scheduler")
+    results = await asyncio.gather(pump, status, clockt, devicest, reader,
+                                   heart, sched, return_exceptions=True)
+    for name, result in zip(names, results):
+        print("panel task ended:", name, "-", result)
 
 
 def main():
