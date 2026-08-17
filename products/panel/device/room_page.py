@@ -86,18 +86,28 @@ def _save_room_name(name):
     if not name:
         return
     zone_id = _current["zone_id"]
+
+    def ok(saved):
+        # Applied here rather than straight after dispatch. A rename is rare
+        # and deliberate, so there is nothing to buy by showing it before it
+        # is saved -- and a title that changed on a write the repository
+        # refused is a lie the 3-second poll would quietly take back.
+        updated = []
+        for zone in store.zones.get():
+            if zone["id"] == zone_id:
+                zone = dict(zone)
+                zone["name"] = name
+            updated.append(zone)
+        store.zones.set(updated)
+        _current["name"] = name
+        if _current.get("title") is not None:
+            _current["title"].set_text(name)
+
     bridge.dispatch(store.api, "zones.update",
-                    {"id": zone_id, "data": {"name": name}})
-    updated = []
-    for zone in store.zones.get():
-        if zone["id"] == zone_id:
-            zone = dict(zone)
-            zone["name"] = name
-        updated.append(zone)
-    store.zones.set(updated)
-    _current["name"] = name
-    if _current.get("title") is not None:
-        _current["title"].set_text(name)
+                    {"id": zone_id, "data": {"name": name}},
+                    on_ok=ok,
+                    on_err=lambda kind, message: toast.notify(
+                        "שם החדר לא נשמר"))
 
 
 def _delete_room(e):

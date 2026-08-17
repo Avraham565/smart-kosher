@@ -23,6 +23,7 @@ import shell
 import store
 import text_input
 import theme
+import toast
 from reactive import effect
 from widgets import w_card_button, w_group, w_label, w_pager
 
@@ -60,7 +61,9 @@ def _create_room(name):
     if not name:
         return
     bridge.dispatch(store.api, "zones.create", {"data": {"name": name}},
-                    on_ok=lambda z: _refresh_zones())
+                    on_ok=lambda z: _refresh_zones(),
+                    on_err=lambda kind, message: toast.notify(
+                        "החדר לא נוצר — " + (message or "שגיאה")))
 
 
 def _add_room(e):

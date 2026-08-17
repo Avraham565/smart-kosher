@@ -20,6 +20,7 @@ import sched_describe
 import shell
 import store
 import theme
+import toast
 from reactive import effect
 from widgets import w_card_button, w_group, w_label, w_pager
 
@@ -57,21 +58,37 @@ def _target_name(schedule):
 
 
 def _set_enabled(schedule, enabled):
+    # No optimistic write: this is a repository write in the same process, so
+    # there is no latency to hide, and a switch that flips back a moment later
+    # is the worst of both. dev_common.device_toggle is the deliberate
+    # exception -- a radio command is slow enough to be worth guessing about.
+    def ok(result):
+        updated = []
+        for item in store.schedules.get():
+            if item["id"] == schedule["id"]:
+                item = dict(item)
+                item["enabled"] = enabled
+            updated.append(item)
+        store.schedules.set(updated)
+
     bridge.dispatch(store.api, "schedules.set_enabled",
-                    {"id": schedule["id"], "enabled": enabled})
-    updated = []
-    for item in store.schedules.get():
-        if item["id"] == schedule["id"]:
-            item = dict(item)
-            item["enabled"] = enabled
-        updated.append(item)
-    store.schedules.set(updated)
+                    {"id": schedule["id"], "enabled": enabled},
+                    on_ok=ok,
+                    on_err=lambda kind, message: toast.notify(
+                        "לא ניתן להפעיל את התזמון" if enabled
+                        else "לא ניתן להשבית את התזמון"))
 
 
 def _delete(schedule):
-    bridge.dispatch(store.api, "schedules.delete", {"id": schedule["id"]})
-    store.schedules.set(
-        [s for s in store.schedules.get() if s["id"] != schedule["id"]])
+    def ok(result):
+        store.schedules.set(
+            [s for s in store.schedules.get() if s["id"] != schedule["id"]])
+        toast.notify("התזמון נמחק")
+
+    bridge.dispatch(store.api, "schedules.delete", {"id": schedule["id"]},
+                    on_ok=ok,
+                    on_err=lambda kind, message: toast.notify(
+                        "התזמון לא נמחק — " + (message or "שגיאה")))
 
 
 def _edit(schedule):

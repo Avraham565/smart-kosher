@@ -16,6 +16,8 @@ import sched_labels
 import shell
 import store
 import theme
+import toast
+from smart_kosher.domain.schedules import MAX_ZMAN_OFFSET_MINUTES
 from widgets import w_card_button, w_group, w_label
 
 _screen = None
@@ -231,6 +233,15 @@ def _offset():
 
     def on_ok(buf):
         minutes = int(buf or "0")
+        # Checked here for the same reason _fixed_time checks HH:MM: the keypad
+        # takes four digits, the domain accepts -2880..2880 minutes
+        # (domain/schedules.py), and the sign is chosen above -- so 0..2880 is
+        # exactly the reachable range. Without this the wizard collected 9999,
+        # the domain refused it, and the save vanished silently.
+        if minutes > MAX_ZMAN_OFFSET_MINUTES:
+            _title.set_text("היסט עד {} דק׳ (48 שעות)".format(
+                MAX_ZMAN_OFFSET_MINUTES))
+            return
         _draft.setdefault("trigger_data", {})["offset"] = _offset_sign * minutes
         _goto("recurrence")
     _numeric("דקות", lambda b: (b or "0") + " דק׳", 4, on_ok)
@@ -296,14 +307,25 @@ def _days():
 def _save():
     data = dict(_draft)
     data.setdefault("enabled", True)
+
+    def ok(saved):
+        _refresh()
+        lv.screen_load(_return)
+
+    def err(kind, message):
+        # Stay on the wizard. Leaving unconditionally was how a schedule the
+        # user had just finished building could simply never exist: the screen
+        # closed exactly as it does on success, the list showed nothing new,
+        # and the only clue was that the light never came on.
+        toast.notify("התזמון לא נשמר — " + (message or "שגיאה"))
+
     if "id" in data:                             # editing an existing schedule
         bridge.dispatch(store.api, "schedules.update",
                         {"id": data["id"], "data": data},
-                        on_ok=lambda s: _refresh())
+                        on_ok=ok, on_err=err)
     else:
         bridge.dispatch(store.api, "schedules.create", {"data": data},
-                        on_ok=lambda s: _refresh())
-    lv.screen_load(_return)
+                        on_ok=ok, on_err=err)
 
 
 def _refresh():

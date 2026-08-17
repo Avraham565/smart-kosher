@@ -43,19 +43,29 @@ def _save_name(name):
     ep = _endpoint()
     data = dict(ep)
     data["name"] = name
+
+    def ok(saved):
+        # Same reasoning as the room rename: applied only once the repository
+        # has taken it, because a heading that changed on a rejected write is
+        # a lie the device poll silently reverses a few seconds later.
+        updated = []
+        for item in store.endpoints.get():
+            if item["id"] == ep["id"]:
+                item = dict(item)
+                item["name"] = name
+            updated.append(item)
+        store.endpoints.set(updated)
+        renamed = dict(ep)
+        renamed["name"] = name
+        _current["endpoint"] = renamed
+        if _current.get("title") is not None:
+            _current["title"].set_text(name)
+
     bridge.dispatch(store.api, "endpoints.update",
-                    {"id": ep["id"], "data": data})
-    updated = []
-    for item in store.endpoints.get():
-        if item["id"] == ep["id"]:
-            item = dict(item)
-            item["name"] = name
-        updated.append(item)
-    store.endpoints.set(updated)
-    ep = dict(ep)
-    ep["name"] = name
-    _current["endpoint"] = ep
-    _current["title"].set_text(name)
+                    {"id": ep["id"], "data": data},
+                    on_ok=ok,
+                    on_err=lambda kind, message: toast.notify(
+                        "שם המכשיר לא נשמר"))
 
 
 def _remove(e):

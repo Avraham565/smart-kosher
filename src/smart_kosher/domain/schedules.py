@@ -45,6 +45,12 @@ RECURRENCE_TYPES = {
 }
 TARGET_TYPES = ("endpoint", "group")
 
+# How far a zman_offset trigger may sit from its zman, either side. Named
+# because the panel's wizard has to refuse the same number at the keypad --
+# a UI that collects a value the domain will reject produces a save that
+# silently does nothing, and a second copy of the bound is how the two drift.
+MAX_ZMAN_OFFSET_MINUTES = 2880          # 48 hours
+
 
 class ScheduleValidationError(ValueError):
     pass
@@ -93,8 +99,12 @@ def validate_schedule(schedule):
                 raise ValueError("unknown zman: {}".format(zman))
             if trigger_type == "zman_offset":
                 offset = trigger_data.get("offset", 0)
-                if not is_integer(offset) or not -2880 <= offset <= 2880:
-                    raise ValueError("zman offset must be in -2880..2880 minutes")
+                if (not is_integer(offset)
+                        or not -MAX_ZMAN_OFFSET_MINUTES
+                        <= offset <= MAX_ZMAN_OFFSET_MINUTES):
+                    raise ValueError(
+                        "zman offset must be in -{0}..{0} minutes".format(
+                            MAX_ZMAN_OFFSET_MINUTES))
         else:
             raise ValueError("unsupported trigger_type")
 
