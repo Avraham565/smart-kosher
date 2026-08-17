@@ -25,22 +25,30 @@ HWTEST = os.path.join(HERE, os.pardir, "hwtest")
 # are what it imports and may have changed alongside it. The suite itself comes
 # from hwtest/; everything it exercises comes from device/.
 #
-# This list is the suite's import closure, by hand, and a name missing from it
-# fails silently in the worst way: the module is already on the board from the
-# last deploy, so nothing errors -- the run just tests the *old* copy and
-# reports green. clock.py was missing for exactly that reason (shell.py imports
-# it, and no test names it directly). When a module here grows an import, add
-# it, or deploy first and run this after.
+# This list is the suite's import closure, and a name missing from it fails
+# silently in the worst way: the module is already on the board from the last
+# deploy, so nothing errors -- the run just tests the *old* copy and reports
+# green. It happened to clock.py (shell.py imports it, and no test names it
+# directly) and then to zone_picker.py, while the very test written to drive it
+# was added.
+#
+# It is no longer kept by eye. tests/test_hwtest_payload_is_complete.py derives
+# the closure from the source and fails if this list drifts either way, so the
+# fix for "the run tested the old copy" is now a red suite on the host rather
+# than a puzzled hour at the bench. Add an import, run the suite, follow it.
 SUITE = "hwtest_ui.py"
 PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
            "keyboard.py", "widgets.py", "theme.py", "display.py", "shell.py",
            "clock.py", "bridge.py", "store.py", "hebdate.py", "reactive.py",
-           # the paging work: the three list pages, their shared arithmetic,
-           # and what they import. zone_picker is here because the teardown
-           # test drives it, and it was missing while that test was written.
+           # the paging work: the three list pages and their shared arithmetic
            "pager.py", "rooms_page.py", "room_page.py", "schedules_page.py",
            "zone_picker.py", "text_input.py", "dev_common.py", "toast.py",
-           "sched_describe.py", "sched_labels.py")
+           "sched_describe.py", "sched_labels.py",
+           # Reachable only through imports that fire on a tap this suite never
+           # makes (room -> device, schedules -> wizard, back -> home). Carried
+           # anyway: the closure rule has no judgement in it, and judgement is
+           # what failed here twice. Four file copies is the whole cost.
+           "device_page.py", "schedule_add.py", "ui_home.py", "pages.py")
 CITY_DATA = ("cities.json", "cities.py", "__init__.py")
 
 # The suite builds three screens and measures forty city names through each of
