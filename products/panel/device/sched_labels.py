@@ -1,5 +1,19 @@
 # Hebrew labels + option orders for the schedule wizard and descriptions. Pure
 # data (no LVGL), shared by sched_describe and schedule_add.
+#
+# The keys below are restated rather than pulled from the domain, and that is
+# deliberate twice over. This module loads on the device before the display
+# exists, so it stays free of dependencies -- the documented device constraint
+# CLAUDE.md names, and tests/test_zman_keys_are_in_sync.py enforces it as a
+# plain substring check over this whole file (mind the wording of any comment
+# you add here). And a label map has to name every key it labels, so pulling
+# the vocabulary in would not remove one line of it.
+#
+# What could actually drift -- the key set no longer matching the domain's --
+# is pinned as full equality by tests/test_schedule_vocab_is_in_sync.py, for
+# both the zmanim and the recurrence types. That is the single source doing its
+# job through a test rather than a dependency, which is what the rule asks for
+# when the dependency is the thing that is blocked.
 
 ZMAN_NAMES = {
     "alot_hashachar": "עלות השחר", "talit_and_tefillin": "טלית ותפילין",
