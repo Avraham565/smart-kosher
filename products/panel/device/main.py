@@ -36,6 +36,11 @@ from smart_kosher.ports.clock import MIN_VALID_YEAR
 _STATUS_PERIOD_S = 5
 _CLOCK_PERIOD_S = 10
 _DEVICES_PERIOD_S = 3
+_SENTINEL_PERIOD_S = 30
+
+# Backoff for a UART that keeps failing: first pause, then doubling to a cap.
+_READER_BACKOFF_S = 0.1
+_READER_BACKOFF_MAX_S = 5
 
 # The boot sentinel, printed once the loop is up. host/clean_board.py resets the
 # board and greps the boot output for exactly this string, to tell "main.py is
@@ -170,11 +175,13 @@ async def _zigbee_reader(gateway, uart):
     Every line (ack, error, device_joined, attribute_report) goes through
     process_line, which resolves pending commands and heals the registry."""
     reader = asyncio.StreamReader(uart)
+    delay = 0
     while True:
         try:
             line = await reader.readline()
             if line:
                 gateway.process_line(line)
+            delay = 0
         except Exception as exc:
             # readline() is inside the try, not just process_line: it is the
             # call that touches the UART, and a raise here used to escape into
@@ -182,10 +189,64 @@ async def _zigbee_reader(gateway, uart):
             # out a frozen frame (host/clean_board.py), a board that looks
             # alive and is dead.
             print("zigbee line error:", exc)
-            # A UART that faults on every read would otherwise spin this loop
-            # without ever yielding, and on one cooperative loop that starves
-            # LVGL and the scheduler too -- the same freeze by another door.
-            await asyncio.sleep(0.1)
+            # Two separate reasons this backs off rather than retrying flat out.
+            # A UART that faults on every read would spin this loop without
+            # ever yielding, and on one cooperative loop that starves LVGL and
+            # the scheduler too -- the same freeze by another door. And an
+            # unthrottled error print is ten lines a second forever, which
+            # drowns the sentinel below and makes the console useless for
+            # exactly the diagnosis it exists for.
+            delay = (min(delay * 2, _READER_BACKOFF_MAX_S) if delay
+                     else _READER_BACKOFF_S)
+            await asyncio.sleep(delay)
+
+
+async def _sentinel(tasks):
+    """Periodic proof of life on the console. Nothing else can give one.
+
+    BOOT_SENTINEL says the panel started. Until now nothing said it was still
+    going, and the two are not the same question: the RGB DMA keeps scanning
+    out the last frame whatever the software does (host/clean_board.py), so
+    what you see on the glass is evidence of nothing. From outside, a frozen
+    panel and a healthy one are identical.
+
+    gather cannot fill the gap either. With return_exceptions it reports only
+    once *every* task has ended, and these are infinite loops, so a task that
+    dies is silent for as long as the board stays powered.
+
+    Two signals, because there are two ways to stop:
+
+    * ``Task.done()`` names a task that ended -- the failure the guards in
+      _zigbee_reader and watchdog make unlikely rather than impossible.
+    * the pump's cycle count catches wedging, which done() cannot see: a task
+      blocked forever is still 'running'. The pump is the right probe because
+      everything shares its one cooperative loop, so a count that stops means
+      the loop stopped, whoever actually jammed it.
+
+    Cheap on purpose: one line every _SENTINEL_PERIOD_S, two integers, no
+    allocation per cycle anywhere on the hot path.
+    """
+    last = lvgl_loop.beats
+    while True:
+        await asyncio.sleep(_SENTINEL_PERIOD_S)
+        try:
+            cycles = lvgl_loop.beats - last
+            last = lvgl_loop.beats
+            dead = []
+            for name, task in tasks:
+                try:
+                    if task.done():
+                        dead.append(name)
+                except AttributeError:
+                    # An asyncio build without Task.done still gets the pump
+                    # count, which is the half that matters more.
+                    break
+            print("panel alive:", cycles, "lvgl cycles in",
+                  _SENTINEL_PERIOD_S, "s; dead tasks:",
+                  ", ".join(dead) if dead else "none")
+        except Exception as exc:
+            # The liveness probe must never be the thing that dies.
+            print("sentinel error:", exc)
 
 
 async def _run(composed, gateway, uart):
@@ -203,19 +264,21 @@ async def _run(composed, gateway, uart):
           "@", display.PCLK_HZ // 1_000_000,
           "MHz; brain in-process; H2 on UART", _ZIGBEE_UART_ID,
           "; scheduler every", scheduler.TICK_SECONDS, "s")
-    # The net under the nets. Every loop above now guards itself, and that is
-    # the real fix; this only decides what a raise that got past all of them
-    # costs. Without return_exceptions the first one unwinds through gather,
+    watched = (("lvgl pump", pump), ("status", status), ("clock", clockt),
+               ("devices", devicest), ("zigbee reader", reader),
+               ("zigbee watchdog", heart), ("scheduler", sched))
+    # _sentinel is what actually reports a death, every 30s. gather is only the
+    # containment: without return_exceptions the first raise unwinds through it,
     # main() returns, and the RGB DMA keeps scanning out the last frame forever
     # -- a wall panel showing rooms and buttons that answers nothing. With it,
-    # the other six keep running. Note gather returns only once *all* seven
-    # have ended, which for seven infinite loops should be never, so the report
-    # below is the post-mortem, not the alarm.
-    names = ("lvgl pump", "status", "clock", "devices", "zigbee reader",
-             "zigbee watchdog", "scheduler")
+    # the others keep running. It reports nothing useful on its own, because it
+    # returns only once *all* of these have ended and they are infinite loops:
+    # this print is the shutdown record, not the alarm. Held in gather rather
+    # than fire-and-forget so the sentinel keeps a live reference (CLAUDE.md).
+    alive = asyncio.create_task(_sentinel(watched))
     results = await asyncio.gather(pump, status, clockt, devicest, reader,
-                                   heart, sched, return_exceptions=True)
-    for name, result in zip(names, results):
+                                   heart, sched, alive, return_exceptions=True)
+    for (name, _), result in zip(watched + (("sentinel", alive),), results):
         print("panel task ended:", name, "-", result)
 
 

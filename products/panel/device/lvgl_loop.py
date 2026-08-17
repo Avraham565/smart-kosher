@@ -28,10 +28,18 @@ _PUMP_INTERVAL_MS = 5
 
 _handler = getattr(lv, "timer_handler", None) or getattr(lv, "task_handler", None)
 
+# Cycles completed, read by main.py's sentinel as the panel's proof of life.
+# This pump is the one whose death is invisible: the RGB DMA keeps scanning out
+# the last frame whatever the software does (host/clean_board.py), so a frozen
+# count is the only symptom a wedged UI has. A plain counter, deliberately --
+# no timestamp, no history, nothing that allocates per cycle at 200 Hz.
+beats = 0
+
 
 async def pump():
     """Service LVGL forever from the asyncio loop: advance the tick from the
     monotonic clock, then run the timer/render handler each cycle."""
+    global beats
     if _handler is None:
         raise RuntimeError(
             "LVGL binding exposes neither timer_handler nor task_handler")
@@ -43,4 +51,5 @@ async def pump():
         if elapsed > 0:
             lv.tick_inc(elapsed)
         _handler()
+        beats += 1
         await asyncio.sleep_ms(_PUMP_INTERVAL_MS)
