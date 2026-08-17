@@ -44,6 +44,23 @@ _EVENING = (
 )
 
 _screen = None
+_effects = []
+
+
+def _teardown():
+    """Release this page's bindings, before its screen is deleted.
+
+    Nineteen of them: one per time row, plus the date line. A bound effect is
+    owned by the Signal it read (store.today), not by the widget, so an effect
+    whose handle was dropped can never be unsubscribed -- it outlives the
+    screen and writes set_text into freed memory at the next date rollover.
+    pages.py builds this screen once and keeps it, which is the only reason
+    that was survivable; the delete had to be forbidden to keep it that way
+    (hwtest/hwtest_ui.py). Same fix the shell got.
+    """
+    for eff in _effects:
+        eff.dispose()
+    del _effects[:]
 
 
 def _time_of(key):
@@ -75,7 +92,7 @@ def _row(parent, key, label):
     w_label(row, theme.FONTS.small, theme.TEXT, label)
     time_lbl = w_label(row, theme.FONTS.body, theme.PRIMARY, "--:--")
     time_lbl.set_style_base_dir(lv.BASE_DIR.LTR, lv.PART.MAIN)   # tabular digits
-    bind_text(time_lbl, lambda k=key: _time_of(k))
+    _effects.append(bind_text(time_lbl, lambda k=key: _time_of(k)))
 
 
 def _column(parent, rows):
@@ -89,13 +106,14 @@ def _column(parent, rows):
 
 def build():
     global _screen
-    scr, body = shell.page_create("זמני הלכה")
+    _teardown()          # a rebuild must not leave the last build's effects live
+    scr, body = shell.page_create("זמני הלכה", effects=_effects)
     body.set_style_pad_all(12, lv.PART.MAIN)
     body.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     body.set_style_pad_row(8, lv.PART.MAIN)
 
     date = w_label(body, theme.FONTS.body, theme.MUTED, "")
-    bind_text(date, _date_text)
+    _effects.append(bind_text(date, _date_text))
 
     grid = w_group(body, lv.FLEX_FLOW.ROW)
     grid.set_width(lv.pct(100))

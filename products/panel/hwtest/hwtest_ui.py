@@ -329,14 +329,20 @@ def test_settime_still_fits_with_the_city_row(home):
 
 
 def test_other_screens_stay_on_the_page(home):
-    """Not only the screens this change touched.
+    """Not only the screens this change touched -- and then delete it.
 
     The zmanim page is here because it lost a row in the same work -- it was
     laid out as nineteen static entries in two columns, and it is now eighteen.
     A page that is one row short is harmless; one row long is invisible.
+
+    It is also the densest binder in the product (nineteen effects on one
+    Signal), which makes it the sharpest test that a screen can now be torn
+    down and deleted without leaving any of them behind.
     """
+    import store
     import zmanim_page
 
+    settled = len(store.today._observers)
     screen = zmanim_page.build()
     lv.screen_load(screen)
     screen.update_layout()
@@ -345,21 +351,26 @@ def test_other_screens_stay_on_the_page(home):
            str(escaped[:3]))
 
     lv.screen_load(home)
-    # Still deliberately not deleted, but for a smaller reason than before.
+
+    # The delete this test used to forbid, and it is the better test of the two.
     #
-    # The shell's half is fixed: sub_page/page_create now hand the corner
-    # clock's effect to a list the page owns, and the pages that delete screens
-    # dispose it first -- test_deleting_a_sub_page_releases_its_clock below
-    # performs exactly the delete this comment used to forbid.
-    #
-    # What is left is this page's own: zmanim_page._row and its date line call
-    # reactive.bind_text nineteen times and drop every return value, and a bound
-    # effect is owned by the Signal it read (store.today), not by the widget, so
-    # nothing can unsubscribe them. Deleting this screen would still free the
-    # labels under nineteen live effects, and the next date rollover would call
-    # set_text on freed memory. zmanim_page needs the same treatment the shell
-    # just got; until then the cost of keeping the screen is one screen for the
-    # rest of a one-shot run that ends in a reset.
+    # It took both halves. shell.sub_page hands its corner clock to a list the
+    # page owns, and zmanim_page keeps the nineteen bindings its own rows make
+    # -- a bound effect is owned by the Signal it read (store.today, store.now),
+    # not by the widget, so an effect whose handle was dropped could never be
+    # unsubscribed. Twenty of them held set_text on labels this delete frees.
+    zmanim_page._teardown()
+    screen.delete()
+    after = len(store.today._observers)
+    _check("teardown: the zmanim page releases all its bindings",
+           after == settled, "{} -> {}".format(settled, after))
+
+    # The date rollover that used to land on freed memory. Any dict != None
+    # notifies, and every one of the twenty would call set_text from here.
+    store.today.set({})
+    store.today.set(None)
+    _check("teardown: a date write after the delete is survivable", True,
+           "{} observers fired".format(after))
 
 
 def test_deleting_a_sub_page_releases_its_clock(home):

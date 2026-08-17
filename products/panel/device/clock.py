@@ -44,10 +44,16 @@ def bind_time(label):
 
 
 def bind_date(dow_label, hebrew_label, gregorian_label):
-    """Bind the three home-header date labels to the live Hebrew/Gregorian date."""
-    bind_text(dow_label, _dow_text)
-    bind_text(hebrew_label, _hebrew_text)
-    bind_text(gregorian_label, _gregorian_text)
+    """Bind the three home-header date labels to the live Hebrew/Gregorian date.
+
+    Returns the three effects, like bind_time. The home header is permanent so
+    nothing disposes them today, but an effect is owned by the Signal it read,
+    not by the widget: dropping the handle is precisely what made the shell's
+    corner clock outlive the screen it was drawn on. A caller that can delete
+    its labels must be able to hold these."""
+    return (bind_text(dow_label, _dow_text),
+            bind_text(hebrew_label, _hebrew_text),
+            bind_text(gregorian_label, _gregorian_text))
 
 
 def _gregorian(iso):
