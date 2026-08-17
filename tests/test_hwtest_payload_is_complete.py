@@ -82,6 +82,25 @@ def _closure(suite_path):
     return set(name + ".py" for name in seen)
 
 
+# The two checks below are the mechanism. They are functions rather than test
+# bodies so the meta-test can run *them* against a deliberately broken payload
+# instead of restating their arithmetic -- a guard that restates the thing it
+# guards proves only that set subtraction works.
+
+def missing_from_payload(suite_path, payload):
+    """Modules the suite loads that this payload would not refresh.
+
+    Each one is a module the run would exercise from whatever copy the board
+    happens to be carrying.
+    """
+    return sorted(_closure(suite_path) - set(payload))
+
+
+def surplus_in_payload(suite_path, payload):
+    """Names uploaded that the suite never loads."""
+    return sorted(set(payload) - _closure(suite_path))
+
+
 def _runners():
     """(runner, suite_path, payload) for every host runner that uploads one.
 
@@ -116,7 +135,7 @@ class PayloadTests(unittest.TestCase):
     def test_every_module_the_suite_loads_is_uploaded(self):
         for runner, suite, payload in self.runners:
             with self.subTest(runner=runner):
-                missing = sorted(_closure(suite) - payload)
+                missing = missing_from_payload(suite, payload)
                 self.assertEqual(
                     missing, [],
                     "{} would run these from whatever stale copy the board "
@@ -127,7 +146,7 @@ class PayloadTests(unittest.TestCase):
         # it, and an untrusted list is one nobody updates.
         for runner, suite, payload in self.runners:
             with self.subTest(runner=runner):
-                extra = sorted(payload - _closure(suite))
+                extra = surplus_in_payload(suite, payload)
                 self.assertEqual(
                     extra, [],
                     "{} uploads modules its suite never imports: {}".format(
@@ -142,22 +161,45 @@ class PayloadTests(unittest.TestCase):
                         "{} uploads {}, which is not in device/".format(
                             runner, name))
 
-    def test_a_missing_module_is_actually_detected(self):
+    def test_the_check_reports_a_name_dropped_from_the_payload(self):
         """The guard must fail when it should. That is the entire point.
 
-        A pinning test that cannot fail reproduces the exact situation it was
-        written against: everything green, nothing checked. Dropping a name
-        that is genuinely in the closure has to be caught.
+        An earlier version of this test compared ``closure`` against
+        ``payload - {dropped}`` itself, and could not fail: ``dropped`` is
+        taken from ``closure`` and removed from ``payload``, so the difference
+        always contained it. It restated the check's arithmetic instead of
+        running the check, and so proved that set subtraction works -- the very
+        false-green shape this file exists to prevent, one floor up.
+
+        This drives missing_from_payload, the function the real check calls.
+        A closure that stopped following imports inside functions, or one that
+        came back empty, fails here.
         """
         for runner, suite, payload in self.runners:
             with self.subTest(runner=runner):
-                closure = _closure(suite)
-                self.assertTrue(closure, "empty closure proves nothing")
-                for dropped in sorted(closure):
-                    self.assertTrue(
-                        closure - (payload - {dropped}),
+                self.assertEqual(missing_from_payload(suite, payload), [],
+                                 "baseline is not clean, nothing below means "
+                                 "anything")
+                for dropped in sorted(payload):
+                    reported = missing_from_payload(suite,
+                                                    payload - {dropped})
+                    self.assertIn(
+                        dropped, reported,
                         "dropping {} from {} went unnoticed".format(
                             dropped, runner))
+
+    def test_the_closure_follows_imports_inside_functions(self):
+        """Both real misses came in through a function-level import.
+
+        clock.py was reached from shell.py's module scope, but zone_picker.py
+        is imported inside the test function that drives it -- a closure built
+        from tree.body alone would have missed it exactly as the hand-written
+        list did. Named concretely because it is the regression, not an
+        example of one; if the suite stops driving zone_picker, replace this
+        with whatever it drives instead.
+        """
+        suite = os.path.join(HWTEST, "hwtest_ui.py")
+        self.assertIn("zone_picker.py", _closure(suite))
 
 
 if __name__ == "__main__":
