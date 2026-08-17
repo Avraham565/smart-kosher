@@ -6,24 +6,42 @@
 #
 # zone_id None is the "ללא חדר" bucket (devices with no/unknown room); it has no
 # add button (you pair into a real room).
+#
+# Pixel budget (800x480, and nothing here scrolls — see pager.py). This is the
+# tightest of the three list pages, because it is the only one carrying a
+# manage row as well:
+#     480 screen - 64 header                          = 416 body
+#     416 - 2*16 body padding                         = 384
+#     384 - 48 manage - 52 bottom bar - 2*10 pad_row  = 264 for the list
+#     264 fits floor((264 + 8) / (64 + 8))            = 3 rows
+# The "ללא חדר" bucket has no manage row and fits four, but one page cannot
+# have two capacities, so the worst case governs both. The arithmetic is the
+# estimate — hwtest_ui.py measures the real capacity and pins DEVICES_PER_PAGE.
 
 import lvgl as lv
 
 import bridge
 import dev_common
+import pager
 import shell
 import store
 import text_input
 import theme
 import toast
 from reactive import bind_text, effect
-from widgets import w_card_button, w_group, w_label
+from widgets import w_card_button, w_group, w_label, w_pager
+
+# Pinned by hwtest_ui.test_lists_never_overflow_the_glass.
+DEVICES_PER_PAGE = 3
 
 _screen = None
 _list = None
 _current = {}
 _effects = []
 _row_effects = []
+_page = 0
+_pager_label = None
+_pager_controls = ()
 
 
 def _endpoints_here():
@@ -128,18 +146,43 @@ def _device_row(parent, endpoint):
     _row_effects.append(effect(_apply))
 
 
+def _turn(delta):
+    global _page
+    _page += delta
+    _rebuild()          # clamped there; nothing else may assume _page is valid
+
+
+def _sync_pager(total):
+    _pager_label.set_text(pager.label(_page, total, DEVICES_PER_PAGE))
+    many = pager.page_count(total, DEVICES_PER_PAGE) > 1
+    for control in _pager_controls:
+        if many:
+            control.remove_flag(lv.obj.FLAG.HIDDEN)
+        else:
+            control.add_flag(lv.obj.FLAG.HIDDEN)
+
+
 def _rebuild():
+    global _page
     endpoints = _endpoints_here()          # tracks store.endpoints + store.zones
     for eff in _row_effects:
         eff.dispose()
     del _row_effects[:]
     _list.clean()
+    # Explicit order, not the repository's: the 3-second poll rebuilds this
+    # list constantly, and a device that hops pages between rebuilds is a
+    # device the user's finger misses. Name first, id to break ties.
+    endpoints = sorted(endpoints,
+                       key=lambda ep: (ep.get("name") or "", ep["id"]))
+    _page = pager.clamp_page(_page, len(endpoints), DEVICES_PER_PAGE)
     if not endpoints:
         w_label(_list, theme.FONTS.body, theme.MUTED,
                 "אין מכשירים בחדר").center()
+        _sync_pager(0)
         return
-    for endpoint in endpoints:
+    for endpoint in pager.page_items(endpoints, _page, DEVICES_PER_PAGE):
         _device_row(_list, endpoint)
+    _sync_pager(len(endpoints))
 
 
 def _teardown():
@@ -152,7 +195,7 @@ def _teardown():
 
 
 def _build():
-    global _list
+    global _list, _pager_label, _pager_controls
     scr, body, title = shell.sub_page(_current["name"] or "חדר", on_back=_back,
                                       effects=_effects)
     _current["title"] = title
@@ -164,7 +207,6 @@ def _build():
     _list.set_width(lv.pct(100))
     _list.set_flex_grow(1)
     _list.set_style_pad_row(8, lv.PART.MAIN)
-    _effects.append(effect(_rebuild))
 
     if _current["zone_id"] is not None:
         # room management: rename / delete
@@ -182,9 +224,20 @@ def _build():
         delete.add_event_cb(_delete_room, lv.EVENT.CLICKED, None)
         w_label(delete, theme.FONTS.body, theme.DANGER, "מחק חדר").center()
 
-        add = w_card_button(body)
-        add.set_width(lv.pct(100))
-        add.set_height(52)
+    # The bottom bar exists in both cases, so the "ללא חדר" bucket keeps the
+    # same list geometry as a real room. Built before the effect: _rebuild
+    # writes the pager label on its first pass.
+    bar = w_group(body, lv.FLEX_FLOW.ROW)
+    bar.set_width(lv.pct(100))
+    bar.set_height(theme.TAP_MIN + 8)
+    bar.set_style_pad_column(theme.GAP, lv.PART.MAIN)
+    _, _pager_label, _pager_controls = w_pager(
+        bar, lambda: _turn(-1), lambda: _turn(1))
+
+    if _current["zone_id"] is not None:
+        add = w_card_button(bar)
+        add.set_flex_grow(1)
+        add.set_height(theme.TAP_MIN + 8)
         add.set_style_bg_color(theme.PRIMARY, lv.PART.MAIN)
         add.add_event_cb(_add_device, lv.EVENT.CLICKED, None)
         add_lbl = w_label(add, theme.FONTS.h1, theme.SURFACE, "")
@@ -193,13 +246,19 @@ def _build():
         _effects.append(bind_text(
             add_lbl, lambda: "מחפש מכשיר… (ביטול)"
             if store.pairing.get() == zone_id else "+ הוסף מכשיר"))
+
+    _effects.append(effect(_rebuild))
     return scr
 
 
 def open(zone_id, name):
-    global _screen, _current
+    global _screen, _current, _page
     return_screen = lv.screen_active()
     _teardown()
+    # A different room is a different list, so paging starts over. This is the
+    # one reset that is right: clamp_page holds the index across rebuilds of
+    # the *same* list, which is a separate question from opening another one.
+    _page = 0
     old = _screen
     _current = {"zone_id": zone_id, "name": name, "return": return_screen}
     _screen = _build()

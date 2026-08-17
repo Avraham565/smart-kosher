@@ -34,13 +34,21 @@ HWTEST = os.path.join(HERE, os.pardir, "hwtest")
 SUITE = "hwtest_ui.py"
 PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
            "keyboard.py", "widgets.py", "theme.py", "display.py", "shell.py",
-           "clock.py", "bridge.py", "store.py", "hebdate.py", "reactive.py")
+           "clock.py", "bridge.py", "store.py", "hebdate.py", "reactive.py",
+           # the paging work: the three list pages, their shared arithmetic,
+           # and what they import. zone_picker is here because the teardown
+           # test drives it, and it was missing while that test was written.
+           "pager.py", "rooms_page.py", "room_page.py", "schedules_page.py",
+           "zone_picker.py", "text_input.py", "dev_common.py", "toast.py",
+           "sched_describe.py", "sched_labels.py")
 CITY_DATA = ("cities.json", "cities.py", "__init__.py")
 
 # The suite builds three screens and measures forty city names through each of
-# them: about a minute on the board. Ten times that is not a slow board, it is
-# one that stopped answering -- and unbounded, mpremote waits on the raw REPL
-# for a terminator a reset board will never send, so the run hangs forever with
+# them, then walks the three list pages up to twice their page capacity to
+# measure how many rows really fit -- another few dozen screen builds. Call it
+# two minutes on the board. Ten times that is not a slow board, it is one that
+# stopped answering -- and unbounded, mpremote waits on the raw REPL for a
+# terminator a reset board will never send, so the run hangs forever with
 # main.py still deleted.
 RUN_TIMEOUT_S = 600
 

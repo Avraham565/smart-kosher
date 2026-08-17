@@ -414,6 +414,151 @@ def test_deleting_a_sub_page_releases_its_clock(home):
     _check("teardown: back on the calling screen", lv.screen_active() is home)
 
 
+MIN_USABLE_PER_PAGE = 3
+
+
+def _measure(case, count, home):
+    """Seed ``count`` items, build the page, and answer (fits, escaped).
+
+    _escapes walks absolute screen coordinates, so a widget drawn under the
+    edge of the glass is caught even though LVGL clips it in silence.
+
+    Disposal is per case rather than a plain delete(). room_page.open() already
+    deletes the screen it replaces, so deleting it here too would be a double
+    free -- and the pages that *are* cached in the product (rooms, schedules)
+    have to be torn down before their screen goes, or the effects they built
+    outlive it. Both are the same lesson from a different angle.
+    """
+    _, build, seed, _, dispose = case
+    seed(count)
+    screen = build()
+    lv.screen_load(screen)
+    screen.update_layout()
+    escaped = _escapes(screen)
+    lv.screen_load(home)
+    dispose(screen)
+    return not escaped, escaped
+
+
+def _capacity(case, home):
+    """The largest number of items that still fits, measured not calculated.
+
+    Walks up from one until something escapes. Bounded at twice the declared
+    capacity: the answer only has to be sharp enough to confirm the constant
+    and show what headroom was left, and every step builds a real screen.
+    """
+    declared = case[3]
+    found = 0
+    for count in range(1, declared * 2 + 1):
+        fits, _ = _measure(case, count, home)
+        if not fits:
+            break
+        found = count
+    return found
+
+
+def test_lists_never_overflow_the_glass(home):
+    """The three pages that grow with use, measured on the panel.
+
+    This is the test the paging work was written against, and it is the
+    authority on the numbers: the pixel budgets in those three docstrings are
+    arithmetic, and arithmetic does not know what the font metrics do to a row.
+    If a constant here is wrong the page silently loses its last item, which is
+    a schedule the user cannot delete while it goes on firing.
+
+    Two questions per page. Does a full page fit -- which is the constant being
+    correct. And what is the real capacity -- which is whether the constant is
+    leaving a whole row of glass unused.
+
+    Nothing is written to /data: each page is seeded by writing its store
+    Signal directly, which is the same path the brain's poll uses.
+    """
+    import room_page
+    import rooms_page
+    import schedules_page
+    import store
+
+    def seed_zones(count):
+        store.endpoints.set([])
+        store.zones.set([{"id": "z{}".format(i), "name": "חדר מספר {}".format(i)}
+                         for i in range(count)])
+
+    def seed_devices(count):
+        store.zones.set([{"id": "z0", "name": "סלון"}])
+        store.endpoints.set(
+            [{"id": "e{}".format(i), "name": "מכשיר מספר {}".format(i),
+              "zone_id": "z0", "ieee_address": "00:{:02d}".format(i)}
+             for i in range(count)])
+
+    def seed_schedules(count):
+        # The longest description the wizard can produce: a named target, a
+        # zman with an offset, and a weekday list. Layout is decided by the
+        # widest row, not the average one.
+        store.endpoints.set([{"id": "e0", "name": "מנורת הסלון הגדולה",
+                              "zone_id": "z0", "ieee_address": "00:00"}])
+        store.schedules.set(
+            [{"id": "s{}".format(i), "enabled": True, "action_type": "on",
+              "target_type": "endpoint", "target_id": "e0",
+              "trigger_type": "zman_offset",
+              "trigger_data": {"zman": "tset_hakohavim", "offset": -20},
+              "recurrence_type": "days_of_week",
+              "recurrence_data": {"days": [0, 1, 2, 3, 4]}}
+             for i in range(count)])
+
+    def build_room():
+        room_page.open("z0", "סלון")
+        return room_page._screen
+
+    def kept(screen):
+        # room_page.open() deletes the screen it replaces; deleting it here
+        # would be the second free of the same object.
+        pass
+
+    cases = (
+        ("rooms", rooms_page.build, seed_zones, rooms_page.ROOMS_PER_PAGE,
+         lambda screen: (rooms_page._teardown(), screen.delete())),
+        ("devices", build_room, seed_devices, room_page.DEVICES_PER_PAGE, kept),
+        ("schedules", schedules_page.build, seed_schedules,
+         schedules_page.SCHEDULES_PER_PAGE,
+         lambda screen: (schedules_page._teardown(), screen.delete())),
+    )
+
+    for case in cases:
+        name, _, _, declared, _ = case
+
+        # A full page must fit. This is the constant being right.
+        fits, escaped = _measure(case, declared, home)
+        _check("paging: {} fits {} per page".format(name, declared),
+               fits, str(escaped[:2]))
+
+        # And a list five times longer must still fit, which is what proves the
+        # pager is slicing rather than the list happening to be short.
+        fits, escaped = _measure(case, declared * 5, home)
+        _check("paging: {} stays on one page at {} items".format(
+            name, declared * 5), fits, str(escaped[:2]))
+
+        measured = _capacity(case, home)
+        _check("paging: {} constant is within the real capacity".format(name),
+               declared <= measured,
+               "declared {}, measured {}".format(declared, measured))
+        _check("paging: {} constant is not leaving a row unused".format(name),
+               measured <= declared,
+               "declared {} but {} fit -- raise the constant".format(
+                   declared, measured))
+
+        # A product question, not a layout one: at one or two items a page the
+        # pager costs more than it returns, and the card height wants rethinking
+        # before this ships.
+        _check("paging: {} page holds enough to be usable".format(name),
+               measured >= MIN_USABLE_PER_PAGE,
+               "only {} fit -- reconsider the card height".format(measured))
+
+    seed_zones(0)
+    seed_schedules(0)
+    store.endpoints.set([])
+    lv.screen_load(home)
+
+
 def _tree_size(obj):
     """Widgets in the subtree, obj included."""
     total = 1
@@ -470,6 +615,7 @@ def run():
     test_no_widget_escapes_its_parent(home)
     test_settime_still_fits_with_the_city_row(home)
     test_other_screens_stay_on_the_page(home)
+    test_lists_never_overflow_the_glass(home)
     test_deleting_a_sub_page_releases_its_clock(home)
     test_reopening_does_not_leak(home)
 

@@ -59,6 +59,49 @@ def w_header(parent, height, pad_hor):
     return h
 
 
+def w_pager(parent, on_prev, on_next):
+    """The pager controls — ``› prev · 2 / 3 · next ‹`` — as one compact group.
+
+    Meant to sit in a page's bottom bar beside its add button, so paging costs
+    no vertical budget of its own; on a 480px panel a dedicated row would have
+    taken a whole card off every list. The arrows are TAP_MIN square, which is
+    the same reason a shrinking card was rejected (see pager.py).
+
+    RTL: the first child lands on the right, so "previous" is ``›``.
+
+    Returns (group, position_label, controls). Hide ``controls`` on a
+    single-page list rather than removing them — the group keeps its size, so
+    the capacity a page measured on the glass never changes underneath it.
+    """
+    size = theme.TAP_MIN + 8
+    group = w_group(parent, lv.FLEX_FLOW.ROW)
+    group.set_height(size)
+    group.set_style_pad_column(6, lv.PART.MAIN)
+    group.set_flex_align(lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER,
+                         lv.FLEX_ALIGN.CENTER)
+
+    prev = w_card_button(group)
+    prev.set_size(size, size)
+    prev.set_style_pad_all(0, lv.PART.MAIN)
+    prev.add_event_cb(lambda e: on_prev(), lv.EVENT.CLICKED, None)
+    w_label(prev, theme.FONTS.title, theme.TEXT, "›").center()
+
+    # Fixed width: "1 / 1" and "10 / 12" must not resize the group and shove
+    # the add button around on every page turn.
+    position = w_label(group, theme.FONTS.body, theme.MUTED, "1 / 1")
+    position.set_width(72)
+    position.set_style_base_dir(lv.BASE_DIR.LTR, lv.PART.MAIN)
+    position.set_style_text_align(lv.TEXT_ALIGN.CENTER, lv.PART.MAIN)
+
+    nxt = w_card_button(group)
+    nxt.set_size(size, size)
+    nxt.set_style_pad_all(0, lv.PART.MAIN)
+    nxt.add_event_cb(lambda e: on_next(), lv.EVENT.CLICKED, None)
+    w_label(nxt, theme.FONTS.title, theme.TEXT, "‹").center()
+
+    return group, position, (prev, nxt)
+
+
 def w_card_button(parent):
     """A clickable card (theme.card look + pressed feedback), ready for content
     and an event callback. Size/flex are the caller's to set."""
