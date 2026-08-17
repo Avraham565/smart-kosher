@@ -7,18 +7,40 @@
 # Only the no-extra-date recurrences are offered for now (sched_labels
 # .RECURRENCE_SIMPLE); the date-based ones come next. No Shabbat presets by
 # request -- just the raw options.
+#
+# Pixel budget (800x480, and nothing here scrolls -- see pager.py):
+#     480 - 64 header                              = 416 body
+#     416 - 2*16 padding                           = 384 for the step
+#     384 - 52 pager row - 10 pad_row              = 322  (paged steps only)
+#     target step also - 82 zone tags - 10 pad_row = 230
+# Two of the eight steps grow with the house rather than with the product, and
+# only those two page. The rest are fixed lists of two to seven options; a
+# reserved pager row would cost them a row of glass to protect against a second
+# page they can never have. hwtest_ui measures every step either way.
+#
+# The zone-tag block is reserved at a fixed two rows so that adding rooms
+# cannot quietly shrink the device grid below it -- a wrapping row that grows
+# is a budget that moves, which is worse than one that is simply too small.
 
 import lvgl as lv
 
 import bridge
 import keyboard
+import pager
 import sched_labels
 import shell
 import store
 import theme
 import toast
 from smart_kosher.domain.schedules import MAX_ZMAN_OFFSET_MINUTES
-from widgets import w_card_button, w_group, w_label
+from widgets import w_card_button, w_group, w_label, w_pager
+
+# Pinned by hwtest_ui.test_the_wizard_stays_on_the_glass.
+TARGETS_PER_PAGE = 6        # 52px cells, under the reserved tag block
+ZMANIM_PER_PAGE = 14        # 34px cells, full height
+ZONE_TAGS_PER_PAGE = 6      # chips are content-width; measured, not derived
+_ZONE_TAG_H = 38
+_ZONE_TAG_ROWS = 2
 
 _screen = None
 _body = None
@@ -29,10 +51,28 @@ _stack = []
 _buf = ""
 _offset_sign = -1
 _target_zones = set()       # multi-select zone filter on the target step
+_grid_page = 0
+_tag_page = 0
+_effects = []
 
 
 # ── generic option grid ─────────────────────────────────────────────────────
-def _grid(items, on_pick, cols=2, height=52, font=None):
+def _turn_grid(delta):
+    global _grid_page
+    _grid_page += delta
+    _render()               # clamped in _grid; nothing may assume it is valid
+
+
+def _grid(items, on_pick, cols=2, height=52, font=None, per_page=None):
+    """The wizard's option grid. With ``per_page`` it shows one page at a time
+    and reserves a pager row; without it, everything, and the step's docstring
+    budget is what keeps that honest."""
+    global _grid_page
+    shown = items
+    if per_page:
+        _grid_page = pager.clamp_page(_grid_page, len(items), per_page)
+        shown = pager.page_items(items, _grid_page, per_page)
+
     grid = w_group(_body, lv.FLEX_FLOW.ROW)
     grid.set_width(lv.pct(100))
     grid.set_flex_grow(1)
@@ -40,12 +80,25 @@ def _grid(items, on_pick, cols=2, height=52, font=None):
     grid.set_style_pad_row(8, lv.PART.MAIN)
     grid.set_style_pad_column(8, lv.PART.MAIN)
     width = lv.pct(48) if cols == 2 else lv.pct(100 // cols - 2)
-    for label, value in items:
+    for label, value in shown:
         cell = w_card_button(grid)
         cell.set_width(width)
         cell.set_height(height)
         cell.add_event_cb(lambda e, v=value: on_pick(v), lv.EVENT.CLICKED, None)
         w_label(cell, font or theme.FONTS.body, theme.TEXT, label).center()
+
+    if per_page:
+        bar = w_group(_body, lv.FLEX_FLOW.ROW)
+        bar.set_width(lv.pct(100))
+        bar.set_height(theme.TAP_MIN + 8)
+        bar.set_flex_align(lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.CENTER,
+                           lv.FLEX_ALIGN.CENTER)
+        _, position, controls = w_pager(bar, lambda: _turn_grid(-1),
+                                        lambda: _turn_grid(1))
+        position.set_text(pager.label(_grid_page, len(items), per_page))
+        if pager.page_count(len(items), per_page) <= 1:
+            for control in controls:
+                control.add_flag(lv.obj.FLAG.HIDDEN)
 
 
 def _clear():
@@ -60,7 +113,13 @@ def _render():
 
 
 def _goto(step):
+    global _grid_page, _tag_page
     _stack.append(step)
+    # A new step is a new list, so paging starts over -- but _render() alone
+    # must not reset it, or turning a page (which re-renders) would land back
+    # on the first one, and so would toggling a zone filter.
+    _grid_page = 0
+    _tag_page = 0
     _render()
 
 
@@ -90,13 +149,40 @@ def _pick_target(value):
     _goto("action")
 
 
+def _turn_tags():
+    global _tag_page
+    _tag_page += 1              # one control, so it wraps rather than dead-ends
+    _render()
+
+
 def _zone_tags(tag_items):
+    """The room filter, in a block of fixed height.
+
+    Fixed on purpose. These chips are content-width and wrap, so left to grow
+    they would take a third and fourth row as rooms are added and silently
+    push the device grid below the glass -- a budget that moves is worse than
+    one that is merely tight. Overflow pages inside the block instead, through
+    a chip rather than a second pager, because two pagers on one step is a
+    worse answer than a slightly unusual one.
+    """
+    global _tag_page
+    _tag_page = pager.clamp_page(_tag_page, len(tag_items), ZONE_TAGS_PER_PAGE)
+    pages = pager.page_count(len(tag_items), ZONE_TAGS_PER_PAGE)
+    shown = pager.page_items(tag_items, _tag_page, ZONE_TAGS_PER_PAGE)
+
     tags = w_group(_body, lv.FLEX_FLOW.ROW)
     tags.set_width(lv.pct(100))
+    tags.set_height(_ZONE_TAG_H * _ZONE_TAG_ROWS + 6)
     tags.set_flex_flow(lv.FLEX_FLOW.ROW_WRAP)
     tags.set_style_pad_row(6, lv.PART.MAIN)
     tags.set_style_pad_column(6, lv.PART.MAIN)
-    for label, zone_id in tag_items:
+    if pages > 1:
+        more = w_card_button(tags)
+        more.set_size(lv.SIZE_CONTENT, _ZONE_TAG_H)
+        more.add_event_cb(lambda e: _turn_tags(), lv.EVENT.CLICKED, None)
+        w_label(more, theme.FONTS.small, theme.PRIMARY,
+                "עוד ({}/{}) ›".format(_tag_page + 1, pages)).center()
+    for label, zone_id in shown:
         selected = zone_id in _target_zones
         chip = w_card_button(tags)
         chip.set_size(lv.SIZE_CONTENT, 38)
@@ -129,7 +215,11 @@ def _target():
         w_label(_body, theme.FONTS.body, theme.MUTED,
                 "אין מכשירים בבחירה").center()
         return
-    _grid(items, _pick_target)
+    # Explicit order: the repository's is not guaranteed, and a device that
+    # hops pages between renders is one the finger misses. Groups sort in with
+    # the endpoints because their label already carries the "קבוצה:" prefix.
+    items.sort(key=lambda pair: (pair[0], pair[1]))
+    _grid(items, _pick_target, per_page=TARGETS_PER_PAGE)
 
 
 def _action():
@@ -209,7 +299,12 @@ def _zman():
         _draft["trigger_data"] = {"zman": value}
         _goto("offset" if _draft["trigger_type"] == "zman_offset"
               else "recurrence")
-    _grid(items, pick, height=34, font=theme.FONTS.small)
+    # Eighteen zmanim in 34px cells came to 370px against a 384px body -- it
+    # fitted by fourteen pixels, which is luck rather than margin, and one more
+    # zman or one taller font would have dropped the last row off the glass in
+    # silence. Paged, with the count measured on the board.
+    _grid(items, pick, height=34, font=theme.FONTS.small,
+          per_page=ZMANIM_PER_PAGE)
 
 
 def _offset():
@@ -342,7 +437,11 @@ _RENDERERS = {
 
 def _build():
     global _screen, _body, _title
-    scr, body, title = shell.sub_page("תזמון חדש", on_back=_back)
+    # effects= closes the last of the dropped-handle family: this screen is
+    # cached and never deleted, so the shell's corner clock could not leak
+    # today, but the next caller to delete it would have found out the hard way.
+    scr, body, title = shell.sub_page("תזמון חדש", on_back=_back,
+                                      effects=_effects)
     body.set_style_pad_all(16, lv.PART.MAIN)
     body.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     body.set_style_pad_row(10, lv.PART.MAIN)

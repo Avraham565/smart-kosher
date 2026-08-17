@@ -373,6 +373,75 @@ def test_other_screens_stay_on_the_page(home):
            "{} observers fired".format(after))
 
 
+def test_the_wizard_stays_on_the_glass(home):
+    """Every step of the add-schedule wizard, with a house too big for it.
+
+    The wizard is the one screen whose layout depends on two lists at once:
+    the room chips wrap, and the device grid sits under whatever height they
+    took. Left alone, adding rooms pushed the grid down rather than making it
+    scroll, so the last devices went under the edge -- and this is the screen
+    where losing an item means the schedule cannot be built at all.
+
+    Driven through _goto rather than by tapping, for the same reason the picker
+    is: what is being measured is the layout, and a synthetic touch would be
+    measuring LVGL's hit-testing instead.
+    """
+    import schedule_add
+    import store
+
+    store.zones.set([{"id": "z{}".format(i),
+                      "name": "חדר ארוך במיוחד {}".format(i)}
+                     for i in range(12)])
+    store.endpoints.set(
+        [{"id": "e{}".format(i), "name": "מכשיר עם שם ארוך {}".format(i),
+          "zone_id": "z0", "ieee_address": "00:{:02d}".format(i)}
+         for i in range(30)])
+    store.groups.set([{"id": "g{}".format(i), "name": "קבוצה {}".format(i)}
+                      for i in range(5)])
+
+    schedule_add.open()
+    screen = schedule_add._screen
+    _check("wizard: the screen builds", screen is not None)
+
+    for step in sorted(schedule_add._RENDERERS):
+        schedule_add._goto(step)
+        screen.update_layout()
+        escaped = _escapes(screen)
+        _check("wizard: {} step stays on screen".format(step),
+               not escaped, str(escaped[:2]))
+
+    # The two paged steps, on their last page -- where a partial page is drawn
+    # and the arithmetic is easiest to get wrong.
+    for step, per_page, total in (("target", schedule_add.TARGETS_PER_PAGE, 35),
+                                  ("zman", schedule_add.ZMANIM_PER_PAGE, 18)):
+        schedule_add._goto(step)
+        for _ in range(total // per_page + 1):
+            schedule_add._turn_grid(1)
+            screen.update_layout()
+            escaped = _escapes(screen)
+            if escaped:
+                break
+        _check("wizard: {} step stays on screen on every page".format(step),
+               not escaped, str(escaped[:2]))
+
+    # The room filter with more rooms than its reserved block holds: the chip
+    # that pages them must not push the grid down.
+    schedule_add._goto("target")
+    for _ in range(3):
+        schedule_add._turn_tags()
+        screen.update_layout()
+        escaped = _escapes(screen)
+        if escaped:
+            break
+    _check("wizard: room filter paging keeps the grid on screen",
+           not escaped, str(escaped[:2]))
+
+    store.zones.set([])
+    store.endpoints.set([])
+    store.groups.set([])
+    lv.screen_load(home)
+
+
 def test_deleting_a_sub_page_releases_its_clock(home):
     """Open a sub-page, delete it, then tick the clock -- the deletion is the test.
 
@@ -616,6 +685,7 @@ def run():
     test_settime_still_fits_with_the_city_row(home)
     test_other_screens_stay_on_the_page(home)
     test_lists_never_overflow_the_glass(home)
+    test_the_wizard_stays_on_the_glass(home)
     test_deleting_a_sub_page_releases_its_clock(home)
     test_reopening_does_not_leak(home)
 
