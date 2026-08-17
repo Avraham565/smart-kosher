@@ -112,14 +112,23 @@ def _render():
     _RENDERERS[step]()
 
 
-def _goto(step):
-    global _grid_page, _tag_page
-    _stack.append(step)
-    # A new step is a new list, so paging starts over -- but _render() alone
-    # must not reset it, or turning a page (which re-renders) would land back
-    # on the first one, and so would toggling a zone filter.
+def _enter_step():
+    """Reset the state that belongs to one step, not to one render.
+
+    The distinction is the whole point. _render() runs again for reasons that
+    are not a step change -- turning a page, toggling a zone filter, choosing
+    the offset's sign -- and anything cleared there is work the user did and
+    watched disappear. Anything cleared here is a fresh question.
+    """
+    global _buf, _grid_page, _tag_page
+    _buf = ""
     _grid_page = 0
     _tag_page = 0
+
+
+def _goto(step):
+    _stack.append(step)
+    _enter_step()
     _render()
 
 
@@ -128,6 +137,7 @@ def _back():
     if not _stack:
         lv.screen_load(_return)
     else:
+        _enter_step()
         _render()
 
 
@@ -243,10 +253,12 @@ def _trigger_type():
 
 
 def _numeric(prompt, fmt, max_len, on_ok):
-    global _buf
-    _buf = ""
+    # _buf is cleared on entering a step, not here. This runs on every render
+    # of the step, and the offset step re-renders whenever "before"/"after" is
+    # tapped -- so clearing here wiped a number the user had already typed and
+    # reset the preview to zero, with nothing to say why.
     _title.set_text(prompt)
-    preview = w_label(_body, theme.FONTS.clock, theme.TEXT, fmt(""))
+    preview = w_label(_body, theme.FONTS.clock, theme.TEXT, fmt(_buf))
     preview.center()
     spacer = lv.obj(_body)
     spacer.set_width(lv.pct(100))

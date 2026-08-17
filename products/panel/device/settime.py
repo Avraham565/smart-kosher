@@ -26,6 +26,7 @@ import shell
 import store
 import theme
 from smart_kosher.ports.clock import MAX_VALID_YEAR, MIN_VALID_YEAR
+from smart_kosher.zmanim import add_gregorian_days, gregorian_day_number
 from widgets import w_card_button, w_group, w_label
 
 # (key, label, width, min, max) -- entry order, shown as chips.
@@ -55,37 +56,17 @@ def _pad(buf, width):
 
 
 # ── local -> UTC (offset is minutes; only ever shifts by <1 day) ────────────
-def _days_in_month(year, month):
-    if month == 2:
-        leap = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
-        return 29 if leap else 28
-    return 31 if month in (1, 3, 5, 7, 8, 10, 12) else 30
-
-
-def _shift_day(year, month, day, delta):
-    day += delta
-    if day < 1:
-        month -= 1
-        if month < 1:
-            month = 12
-            year -= 1
-        day = _days_in_month(year, month)
-    elif day > _days_in_month(year, month):
-        day = 1
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
-    return year, month, day
-
-
+# The calendar arithmetic is the core's. This module used to carry its own
+# _days_in_month and _shift_day -- a second Gregorian leap rule, on the one
+# screen whose whole job is to set the clock every zman is then derived from.
+# add_gregorian_days is the same routine the planner walks dates with.
 def _local_to_utc(year, month, day, hour, minute, offset_min):
     total = hour * 60 + minute - offset_min
     if total < 0:
-        year, month, day = _shift_day(year, month, day, -1)
+        year, month, day = add_gregorian_days(year, month, day, -1)
         total += 1440
     elif total >= 1440:
-        year, month, day = _shift_day(year, month, day, 1)
+        year, month, day = add_gregorian_days(year, month, day, 1)
         total -= 1440
     return year, month, day, total // 60, total % 60
 
@@ -135,7 +116,13 @@ def _confirm(e):
             _set_msg("ערך לא תקין: " + label, theme.DANGER)
             return
         vals[key] = value
-    if vals["day"] > _days_in_month(vals["year"], vals["month"]):
+    # The same check application/device_time.py makes before writing the RTC,
+    # made here so the user is told rather than shown a save that fails. Asking
+    # the core rather than restating the rule: 29 February is the case a second
+    # copy gets wrong, and this screen sets the clock every zman derives from.
+    try:
+        gregorian_day_number(vals["year"], vals["month"], vals["day"])
+    except ValueError:
         _set_msg("היום לא קיים בחודש הזה", theme.DANGER)
         return
 
