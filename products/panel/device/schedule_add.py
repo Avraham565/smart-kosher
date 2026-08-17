@@ -54,6 +54,13 @@ _target_zones = set()       # multi-select zone filter on the target step
 _grid_page = 0
 _tag_page = 0
 _effects = []
+# The option grid of the step currently rendered. Kept only so hwtest_ui can
+# ask whether its rows fit the box rather than merely the glass -- a row that
+# overflows this container is drawn behind the pager bar, on the panel and
+# unreachable, and measuring against the screen alone cannot see it. The three
+# list pages expose their _list for the same question; this one is rebuilt per
+# render, so nothing in the product needs it.
+_grid_obj = None
 
 
 # ── generic option grid ─────────────────────────────────────────────────────
@@ -67,13 +74,14 @@ def _grid(items, on_pick, cols=2, height=52, font=None, per_page=None):
     """The wizard's option grid. With ``per_page`` it shows one page at a time
     and reserves a pager row; without it, everything, and the step's docstring
     budget is what keeps that honest."""
-    global _grid_page
+    global _grid_page, _grid_obj
     shown = items
     if per_page:
         _grid_page = pager.clamp_page(_grid_page, len(items), per_page)
         shown = pager.page_items(items, _grid_page, per_page)
 
     grid = w_group(_body, lv.FLEX_FLOW.ROW)
+    _grid_obj = grid
     grid.set_width(lv.pct(100))
     grid.set_flex_grow(1)
     grid.set_flex_flow(lv.FLEX_FLOW.ROW_WRAP)
@@ -102,6 +110,13 @@ def _grid(items, on_pick, cols=2, height=52, font=None, per_page=None):
 
 
 def _clear():
+    global _grid_obj
+    # Dropped before the widgets go, not after. _body.clean() deletes the grid,
+    # and a step that builds its own layout instead of calling _grid -- days,
+    # or either keypad step -- would otherwise leave this pointing at freed
+    # memory for the next reader. The same use-after-free the corner clock had,
+    # arriving through a reference kept for measurement rather than for drawing.
+    _grid_obj = None
     _body.clean()
 
 

@@ -198,6 +198,37 @@ def _escapes(root, tolerance=1):
     return out
 
 
+def _content_overflow(container):
+    """How far a container's children reach past its own content box, in px.
+
+    _escapes asks a question about the glass; this asks about the box, and the
+    two are not the same. A list row that overflows its container but still
+    lands on the panel is drawn over whatever sits below it -- the pager bar,
+    the add button -- and is unreachable behind them. Nothing leaves the 800x480
+    and nothing complains.
+
+    That gap is not hypothetical. Measuring capacity with _escapes alone
+    reported five rows for all three list pages, which have different row
+    heights and different furniture below them: the number was the height of
+    the panel, not the height of the list.
+
+    Relative coordinates on purpose, unlike _box. Inside one flex container
+    laid out in a column, a child's y is its position in that flow, which is
+    exactly the frame this question lives in.
+    """
+    container.update_layout()
+    bottom = 0
+    for index in range(container.get_child_count()):
+        child = container.get_child(index)
+        if child.has_flag(lv.obj.FLAG.HIDDEN):
+            continue
+        end = child.get_y() + child.get_height()
+        if end > bottom:
+            bottom = end
+    over = bottom - container.get_content_height()
+    return over if over > 0 else 0
+
+
 def _text_width(font, text):
     """Natural width of `text`, measured by rendering it unconstrained."""
     probe = lv.label(lv.screen_active())
@@ -403,12 +434,24 @@ def test_the_wizard_stays_on_the_glass(home):
     screen = schedule_add._screen
     _check("wizard: the screen builds", screen is not None)
 
+    def _wizard_problems():
+        screen.update_layout()
+        problems = _escapes(screen)
+        # The grid too, not only the glass: its rows overflowing their own box
+        # are drawn behind the pager bar, which _escapes cannot see. The three
+        # list pages measured five rows each on the strength of that blind
+        # spot before it was closed.
+        grid = schedule_add._grid_obj
+        over = _content_overflow(grid) if grid is not None else 0
+        if over:
+            problems = problems + ["grid overflows its box by {}px".format(over)]
+        return problems
+
     for step in sorted(schedule_add._RENDERERS):
         schedule_add._goto(step)
-        screen.update_layout()
-        escaped = _escapes(screen)
+        problems = _wizard_problems()
         _check("wizard: {} step stays on screen".format(step),
-               not escaped, str(escaped[:2]))
+               not problems, str(problems[:2]))
 
     # The two paged steps, on their last page -- where a partial page is drawn
     # and the arithmetic is easiest to get wrong.
@@ -417,24 +460,22 @@ def test_the_wizard_stays_on_the_glass(home):
         schedule_add._goto(step)
         for _ in range(total // per_page + 1):
             schedule_add._turn_grid(1)
-            screen.update_layout()
-            escaped = _escapes(screen)
-            if escaped:
+            problems = _wizard_problems()
+            if problems:
                 break
         _check("wizard: {} step stays on screen on every page".format(step),
-               not escaped, str(escaped[:2]))
+               not problems, str(problems[:2]))
 
     # The room filter with more rooms than its reserved block holds: the chip
     # that pages them must not push the grid down.
     schedule_add._goto("target")
     for _ in range(3):
         schedule_add._turn_tags()
-        screen.update_layout()
-        escaped = _escapes(screen)
-        if escaped:
+        problems = _wizard_problems()
+        if problems:
             break
     _check("wizard: room filter paging keeps the grid on screen",
-           not escaped, str(escaped[:2]))
+           not problems, str(problems[:2]))
 
     store.zones.set([])
     store.endpoints.set([])
@@ -498,31 +539,46 @@ def _measure(case, count, home):
     have to be torn down before their screen goes, or the effects they built
     outlive it. Both are the same lesson from a different angle.
     """
-    _, build, seed, _, dispose = case
+    _, build, seed, _, _, dispose, container = case
     seed(count)
     screen = build()
     lv.screen_load(screen)
     screen.update_layout()
-    escaped = _escapes(screen)
+    problems = _escapes(screen)
+    over = _content_overflow(container())
+    if over:
+        problems = problems + ["list overflows its box by {}px".format(over)]
     lv.screen_load(home)
     dispose(screen)
-    return not escaped, escaped
+    return not problems, problems
+
+
+# Walking past this many rows means the page is not paging at all, not that the
+# glass is enormous: the shortest row in the product is 64px in a 416px body.
+_CAPACITY_CEILING = 16
 
 
 def _capacity(case, home):
-    """The largest number of items that still fits, measured not calculated.
+    """The largest number of rows that fits, measured with paging turned off.
 
-    Walks up from one until something escapes. Bounded at twice the declared
-    capacity: the answer only has to be sharp enough to confirm the constant
-    and show what headroom was left, and every step builds a real screen.
+    Paging has to be off, or this measures nothing. With it on, seeding more
+    items just draws the same page again, no widget ever leaves the glass, and
+    the walk returns its own upper bound. The first hardware run of this test
+    did exactly that: it reported twice the declared number for all three
+    pages, 4->8, 3->6, 4->8, which is too tidy to be a measurement of anything.
     """
-    declared = case[3]
-    found = 0
-    for count in range(1, declared * 2 + 1):
-        fits, _ = _measure(case, count, home)
-        if not fits:
-            break
-        found = count
+    _, _, _, module, attr, _, _ = case
+    declared = getattr(module, attr)
+    setattr(module, attr, 10 ** 6)          # one page, however long the list
+    try:
+        found = 0
+        for count in range(1, _CAPACITY_CEILING + 1):
+            fits, _ = _measure(case, count, home)
+            if not fits:
+                break
+            found = count
+    finally:
+        setattr(module, attr, declared)
     return found
 
 
@@ -583,17 +639,23 @@ def test_lists_never_overflow_the_glass(home):
         # would be the second free of the same object.
         pass
 
+    # The per-page constant is carried as (module, attribute) rather than as a
+    # value, so _capacity can turn paging off to measure underneath it.
     cases = (
-        ("rooms", rooms_page.build, seed_zones, rooms_page.ROOMS_PER_PAGE,
-         lambda screen: (rooms_page._teardown(), screen.delete())),
-        ("devices", build_room, seed_devices, room_page.DEVICES_PER_PAGE, kept),
-        ("schedules", schedules_page.build, seed_schedules,
-         schedules_page.SCHEDULES_PER_PAGE,
-         lambda screen: (schedules_page._teardown(), screen.delete())),
+        ("rooms", rooms_page.build, seed_zones, rooms_page, "ROOMS_PER_PAGE",
+         lambda screen: (rooms_page._teardown(), screen.delete()),
+         lambda: rooms_page._list),
+        ("devices", build_room, seed_devices, room_page, "DEVICES_PER_PAGE",
+         kept, lambda: room_page._list),
+        ("schedules", schedules_page.build, seed_schedules, schedules_page,
+         "SCHEDULES_PER_PAGE",
+         lambda screen: (schedules_page._teardown(), screen.delete()),
+         lambda: schedules_page._list),
     )
 
     for case in cases:
-        name, _, _, declared, _ = case
+        name, _, _, module, attr, _, _ = case
+        declared = getattr(module, attr)
 
         # A full page must fit. This is the constant being right.
         fits, escaped = _measure(case, declared, home)
