@@ -223,6 +223,20 @@ async def _sentinel(tasks):
       everything shares its one cooperative loop, so a count that stops means
       the loop stopped, whoever actually jammed it.
 
+    What it does not catch, and cannot: this task rides the same cooperative
+    loop it is watching. Three ways for the panel to stop, and it sees two.
+
+      * a task that raised and ended        -> done() names it
+      * a stall the loop recovers from      -> the cycle count dips, and the
+                                               line after it says so
+      * the loop blocked for good           -> nothing is reported, because
+                                               the reporter is blocked too
+
+    The third is the one a reader will assume is covered, so it is written
+    down. Catching it needs a watcher that does not share this loop -- the
+    hardware WDT, or the H2 noticing the panel stopped talking to it -- and
+    that is separate work, not a bigger version of this.
+
     Cheap on purpose: one line every _SENTINEL_PERIOD_S, two integers, no
     allocation per cycle anywhere on the hot path.
     """
