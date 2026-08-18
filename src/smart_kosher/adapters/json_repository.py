@@ -373,13 +373,30 @@ class JsonEventJournal(EventJournal):
         self._loaded_legacy = False
 
     def _append(self, record):
-        existed = _exists(self._log_path)
         with open(self._log_path, "a") as handle:
             handle.write(json.dumps(record))
             handle.write("\n")
             _flush_file(handle)
-        if not existed:
-            _sync_filesystem()
+        # Unconditional, and the journal's whole purpose rests on this line.
+        # _flush_file returns early when os.fsync is missing, which is exactly
+        # MicroPython (_atomic_io says so in its own header), so os.sync() is
+        # the only primitive that reaches the medium there. Syncing only when
+        # the file had just been created meant every append after the first one
+        # ever stayed in the cache: the event fired, the power went, and on the
+        # next boot was_executed() answered no and the catch-up switched the
+        # relay a second time.
+        #
+        # Both sibling writers already sync unconditionally (_write_compacted,
+        # _save_collection). Only the most frequent path skipped it.
+        #
+        # It is the expensive choice and it is taken deliberately: a Shabbat
+        # with many schedules is one sync per firing, on littlefs. A journal
+        # that does not reach the flash is not a journal -- surviving a reboot
+        # is the entire job. Slow beats untrue. What it actually costs on the
+        # device is unmeasured, and cannot be measured here: CPython has no
+        # littlefs and no flash erase. That belongs in a hardware run, not in a
+        # guess written next to the code it would excuse.
+        _sync_filesystem()
         self._physical_record_count += 1
 
     def _records_with(self, record):

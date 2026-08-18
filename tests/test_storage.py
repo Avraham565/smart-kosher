@@ -111,6 +111,43 @@ class JsonRepositoryTests(unittest.TestCase):
         self.assertEqual((2026, 6, 8), reloaded.get("event-1")["event"]["source_date"])
         self.assertTrue(os.path.exists(os.path.join(self.base, "journal.log")))
 
+    def test_every_journal_append_is_synced_to_the_medium(self):
+        """Not the first one only, which is what the code used to do.
+
+        On MicroPython _flush_file is a no-op -- it returns early when os.fsync
+        is absent -- so os.sync() is the only call that reaches the flash. The
+        old code made it conditional on the log file having just been created,
+        so every append after the very first one on that device stayed in the
+        cache. An event fires, the power goes, and the next boot reads a
+        journal missing it: was_executed() says no, and the catch-up switches
+        the relay again.
+
+        Counted by patching the module's own sync, because there is nothing
+        else to observe. On this host os.sync does not exist at all, so the
+        durable and the broken versions produce byte-identical files -- which
+        is precisely why the bug survived a green suite.
+        """
+        from smart_kosher.adapters import json_repository as module
+
+        journal = JsonEventJournal(self.repository)
+        calls = []
+        original = module._sync_filesystem
+        module._sync_filesystem = lambda: calls.append(1)
+        try:
+            for index in range(3):
+                journal.record(
+                    {"event_id": "sync-{}".format(index),
+                     "schedule_id": "s", "source_date": (2026, 6, 8),
+                     "utc_minute": 100 + index, "target_type": "group",
+                     "target_id": "all", "action_type": "on",
+                     "action_data": {}},
+                    {"status": "executed", "attempts": 1})
+        finally:
+            module._sync_filesystem = original
+
+        self.assertEqual(3, len(calls),
+                         "an append that is not synced is not journalled")
+
     def test_json_event_journal_is_bounded(self):
         journal = JsonEventJournal(self.repository, max_records=2)
         for index in range(3):
