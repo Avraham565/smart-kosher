@@ -74,9 +74,15 @@ Ultra-compact Zigbee 3.0 dual-channel switch with neutral wire. Fits inside stan
 
 ## Controls
 
-### Button ① (Channel 1 button)
+### Button ① (the only button — not per channel)
 - **Hold 5 seconds:** Enter pairing mode (pairing window: 3 minutes)
 - **Click 3 times:** Switch external switch type
+- **Hold 10 seconds:** Factory reset
+
+This sheet used to call it the "Channel 1 button". There is no per-channel
+button: ① is the single button and ② is the LED. The two channels are switched
+through the S1 and S2 terminals (see Wiring) or over Zigbee — endpoints 1 and 2,
+both exposing OnOff, as the paired device's own registry entry confirms.
 
 ### LED Indicator — Blue ②
 | State | Meaning |
