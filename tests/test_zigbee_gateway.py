@@ -792,6 +792,100 @@ class RegistryTests(GatewayTestCase):
         self.assertIn(IEEE, self.gateway.devices())
 
 
+class RegistryDurabilityTests(GatewayTestCase):
+    """The registry is the only record that a device belongs to this house.
+
+    It is rewritten on every join, endpoint discovery, cluster discovery and
+    reporting change, so the burst after a whole house comes back from a power
+    cut is exactly when a write is most likely to be cut in half. Losing it
+    un-pairs every relay in the building, and the old code answered any read
+    failure with an empty dict -- the one answer indistinguishable from "no
+    devices yet".
+    """
+
+    def setUp(self):
+        super(RegistryDurabilityTests, self).setUp()
+        self.path = os.path.join(tempfile.mkdtemp(), "zigbee_devices.json")
+
+    def _gateway(self, uart=None):
+        return ZigbeeGateway(uart or FakeUart(), self.repo,
+                             registry_path=self.path, ack_timeout_ms=80,
+                             log=lambda *a: None)
+
+    def _pair_one(self):
+        gateway = self._gateway(self.uart)
+        self.uart.deliver = gateway.process_line
+        self.uart.feed(joined_event())
+        return gateway
+
+    def _write(self, suffix, text):
+        with open(self.path + suffix, "w") as handle:
+            handle.write(text)
+
+    def test_a_save_leaves_a_backup_behind(self):
+        self._pair_one()
+        self._pair_one()          # second save: the first file becomes .bak
+        self.assertTrue(os.path.exists(self.path))
+        self.assertTrue(os.path.exists(self.path + ".bak"),
+                        "no backup to recover from after a second write")
+
+    def test_a_truncated_primary_recovers_from_the_backup(self):
+        self._pair_one()
+        self._pair_one()
+        self._write("", '{"78:1c:9d:ff:fe:12')      # a write cut in half
+
+        recovered = self._gateway()
+        self.assertIn(IEEE, recovered.devices(),
+                      "a half-written file un-paired the house")
+        self.assertIsNone(recovered.registry_load_error)
+
+    def test_recovery_promotes_the_backup_to_primary(self):
+        # Otherwise the next save turns the good copy into the backup of a
+        # corrupt one, and the second power cut is the fatal one.
+        self._pair_one()
+        self._pair_one()
+        self._write("", "not json at all")
+        self._gateway()
+
+        with open(self.path) as handle:
+            self.assertIn(IEEE, handle.read())
+
+    def test_a_corrupt_registry_is_reported_and_never_silently_emptied(self):
+        self._pair_one()
+        for suffix in ("", ".tmp", ".bak"):
+            if os.path.exists(self.path + suffix):
+                self._write(suffix, "{ truncated")
+
+        gateway = self._gateway()
+        self.assertEqual({}, gateway.devices())
+        self.assertTrue(gateway.registry_load_error,
+                        "an unreadable registry read as an empty one")
+        self.assertTrue(os.path.exists(self.path),
+                        "the corrupt file must be kept for inspection")
+
+    def test_nothing_paired_yet_is_not_an_error(self):
+        gateway = self._gateway()
+        self.assertEqual({}, gateway.devices())
+        self.assertIsNone(gateway.registry_load_error,
+                          "a first boot must not look like corruption")
+
+    def test_a_registry_holding_a_json_non_object_is_corruption(self):
+        self._write("", "[1, 2, 3]")
+        gateway = self._gateway()
+        self.assertEqual({}, gateway.devices())
+        self.assertTrue(gateway.registry_load_error)
+
+    def test_saving_still_works_after_a_failed_load(self):
+        # The gateway has to keep running on a device whose registry was lost:
+        # pairing again is the recovery path, and it must not raise.
+        self._write("", "{ truncated")
+        gateway = self._gateway(self.uart)
+        self.uart.deliver = gateway.process_line
+        self.uart.feed(joined_event())
+
+        self.assertIn(IEEE, self._gateway().devices())
+
+
 class DeviceRemovalTests(GatewayTestCase):
     """Deleting a device on the panel must evict it from the mesh too."""
 

@@ -54,6 +54,10 @@ from ..ports.device_gateway import (
     EXECUTION_SUCCESS_STATUSES,
     DeviceGateway,
 )
+from ._atomic_io import exists as _exists
+from ._atomic_io import flush_file as _flush_file
+from ._atomic_io import replace as _replace
+from ._atomic_io import sync_filesystem as _sync_filesystem
 from .uart_codec import decode as uart_decode
 from .uart_codec import encode as uart_encode
 
@@ -102,6 +106,9 @@ class ZigbeeGateway(DeviceGateway):
         self._seq = 0
         # rid -> [asyncio.Event, reply-or-None]
         self._pending = {}
+        # Set before the load, which writes it: a corrupt registry is reported
+        # here rather than mistaken for an empty one, as SettingsStore does.
+        self.registry_load_error = None
         # ieee -> {"short_addr": str, "endpoint": int, "reporting": bool}
         self._registry = self._load_registry()
         # ieee -> bool. STRICTLY the device's own word (attribute_report or a
@@ -141,21 +148,70 @@ class ZigbeeGateway(DeviceGateway):
     # ── registry persistence (hub owns the registry) ──────────────────
 
     def _load_registry(self):
+        """The paired devices, recovered from whichever copy survived.
+
+        This file is the only record that a device belongs to this house. It is
+        rewritten on every join, endpoint discovery, cluster discovery and
+        reporting change -- so the burst that follows a whole house coming back
+        from a power cut is exactly when a write is most likely to be cut in
+        half, and losing it un-pairs every relay in the building for good.
+
+        The old version wrote straight onto the live file and answered any
+        failure with an empty dict, which is the one answer that cannot be
+        distinguished from "no devices yet". Same contract as the repository
+        and the settings store now: primary, then .tmp, then .bak.
+        """
         if not self._registry_path:
             return {}
-        try:
-            with open(self._registry_path) as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
+        temporary = self._registry_path + ".tmp"
+        backup = self._registry_path + ".bak"
+        candidates = (self._registry_path, temporary, backup)
+        if not any(_exists(path) for path in candidates):
+            return {}                       # genuinely nothing paired yet
+
+        errors = []
+        for path in candidates:
+            try:
+                with open(path) as handle:
+                    data = json.load(handle)
+                if not isinstance(data, dict):
+                    raise ValueError("registry must contain a JSON object")
+                if path != self._registry_path:
+                    _replace(path, self._registry_path)
+                    _sync_filesystem()
+                    self._log("zigbee registry recovered from", path)
+                return data
+            except (OSError, ValueError) as exc:
+                errors.append(str(exc))
+
+        # Never silently swap a corrupt registry for an empty one: the file is
+        # left where it is for inspection, and the failure is said out loud and
+        # kept on the instance, in the pattern SettingsStore.load_error set.
+        self.registry_load_error = "; ".join(errors)
+        self._log("zigbee registry unreadable, keeping the file:",
+                  self.registry_load_error)
+        return {}
 
     def _save_registry(self):
+        """Write the registry through .tmp, keeping the previous copy as .bak."""
         if not self._registry_path:
             return
+        temporary = self._registry_path + ".tmp"
+        backup = self._registry_path + ".bak"
         try:
-            with open(self._registry_path, "w") as f:
-                json.dump(self._registry, f)
+            with open(temporary, "w") as handle:
+                json.dump(self._registry, handle)
+                _flush_file(handle)
+            if _exists(self._registry_path):
+                _replace(self._registry_path, backup)
+            try:
+                _replace(temporary, self._registry_path)
+                _sync_filesystem()
+            except OSError:
+                # Put the backup back rather than leave no primary at all.
+                if _exists(backup) and not _exists(self._registry_path):
+                    _replace(backup, self._registry_path)
+                raise
         except OSError as exc:
             self._log("zigbee registry save failed:", exc)
 
