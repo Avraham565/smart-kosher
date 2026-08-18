@@ -319,6 +319,18 @@ class JsonEventJournal(EventJournal):
             records.append(record)
         return records, truncated_tail
 
+    def _adopt_log(self, path, records, truncated_tail):
+        if path != self._log_path:
+            _replace(path, self._log_path)
+            _sync_filesystem()
+        self._physical_record_count = len(records)
+        self._set_records(records)
+        self._needs_compaction = (
+            truncated_tail
+            or len(records) != len(self._records)
+            or len(self._by_id) != len(self._records)
+        )
+
     def _load_log(self):
         temporary = self._log_path + ".tmp"
         backup = self._log_path + ".bak"
@@ -327,22 +339,40 @@ class JsonEventJournal(EventJournal):
             return False
 
         errors = []
+        empty = None
         for path in candidates:
             try:
                 records, truncated_tail = self._read_log(path)
-                if path != self._log_path:
-                    _replace(path, self._log_path)
-                    _sync_filesystem()
-                self._physical_record_count = len(records)
-                self._set_records(records)
-                self._needs_compaction = (
-                    truncated_tail
-                    or len(records) != len(self._records)
-                    or len(self._by_id) != len(self._records)
-                )
-                return True
-            except (OSError, RepositoryCorruptionError) as exc:
+            except (OSError, ValueError, RepositoryCorruptionError) as exc:
+                # ValueError belongs here for one specific reason:
+                # handle.readlines() raises UnicodeDecodeError on a log with a
+                # torn multi-byte character, and UnicodeDecodeError *is* a
+                # ValueError. Uncaught, it escaped this loop entirely and took
+                # startup down before the backup was ever tried -- a recovery
+                # path that existed and could not be reached.
                 errors.append(str(exc))
+                continue
+            if not records and empty is None:
+                # An empty log is a legitimate state: nothing has fired yet, or
+                # compaction emptied it. So this is not corruption, and it must
+                # not raise. But it is also exactly what a write cut short
+                # leaves behind, and it reads back without error -- so it must
+                # not beat a sibling that still holds records either.
+                #
+                # Held aside and used only if nothing else reads. Without this
+                # the primary always won: a zero-length file satisfies
+                # _exists(), _read_log returns ([], False) happily, and .tmp
+                # and .bak were never opened even though compaction writes a
+                # .bak every time.
+                empty = (path, records, truncated_tail)
+                continue
+            self._adopt_log(path, records, truncated_tail)
+            return True
+
+        if empty is not None:
+            self._adopt_log(*empty)
+            return True
+
         raise RepositoryCorruptionError(
             "journal log has no readable primary, temporary, or backup file: {}".format(
                 "; ".join(errors)

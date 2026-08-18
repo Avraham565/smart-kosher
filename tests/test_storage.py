@@ -232,6 +232,89 @@ class JsonRepositoryTests(unittest.TestCase):
         self.assertTrue(reloaded.was_executed("event-1"))
         self.assertTrue(reloaded.was_executed("event-2"))
 
+    # ── the read path: an unreadable log must not read as an empty one ──
+
+    def _event(self, index):
+        return {"event_id": "event-{}".format(index), "schedule_id": "s",
+                "source_date": (2026, 6, 8), "utc_minute": 100 + index,
+                "target_type": "group", "target_id": "all",
+                "action_type": "on", "action_data": {}}
+
+    def _log(self, suffix=""):
+        return os.path.join(self.base, "journal.log" + suffix)
+
+    def _journal_with(self, count, max_records=128):
+        journal = JsonEventJournal(self.repository, max_records=max_records)
+        for index in range(count):
+            journal.record(self._event(index),
+                           {"status": "executed", "attempts": 1})
+        return journal
+
+    def test_an_emptied_primary_log_recovers_from_the_backup(self):
+        """A zero-length primary is not proof that nothing ever fired.
+
+        It is also what a write cut short leaves behind, and it reads back
+        without error -- _read_log returns ([], False) quite happily. So the
+        primary always won and .tmp and .bak were never opened, even though
+        compaction writes a .bak every single time.
+
+        The cost is the whole point of the journal: every event looks
+        un-executed, and the boot catch-up fires all of them again.
+
+        Five records with max_records=2, because compaction triggers at
+        physical + 1 > max_records * 2 and the .bak this depends on does not
+        exist before the fifth. Measured rather than assumed, because the
+        arrangement is not obvious: after the fifth the primary holds
+        [event-3, event-4] and the backup holds [event-0 .. event-3]. The
+        backup is the log as it stood *before* compaction, so event-4 was
+        written after it and is not in it.
+
+        So the assertion is event-3, the newest the backup can honestly
+        provide. Recovering from a backup always loses whatever was written
+        after it -- and losing one is what this trades against losing all five.
+        """
+        self._journal_with(5, max_records=2)
+        self.assertTrue(os.path.exists(self._log(".bak")),
+                        "no backup was written, so nothing here is proven")
+        open(self._log(), "w").close()                # truncated to nothing
+
+        recovered = JsonEventJournal(JsonRepository(self.base), max_records=2)
+        self.assertTrue(recovered.was_executed("event-3"),
+                        "an emptied log re-fired every event in it")
+
+    def test_a_genuinely_empty_log_is_not_treated_as_corruption(self):
+        # The other half: nothing has fired yet, or compaction emptied it. That
+        # must stay silent, or every fresh device reports a corrupt journal.
+        open(self._log(), "w").close()
+        journal = JsonEventJournal(JsonRepository(self.base))
+        self.assertFalse(journal.was_executed("event-0"))
+
+    def test_an_undecodable_primary_log_falls_through_to_the_backup(self):
+        """readlines() raises UnicodeDecodeError on a torn multi-byte char.
+
+        UnicodeDecodeError is a ValueError, and _load_log caught only OSError
+        and RepositoryCorruptionError -- so it escaped the loop and took
+        startup down before the backup was tried. A recovery path that existed
+        and could not be reached.
+        """
+        self._journal_with(5, max_records=2)
+        with open(self._log(), "wb") as handle:
+            handle.write(b'{"id": "\xff\xfe broken utf-8"}\n')
+
+        recovered = JsonEventJournal(JsonRepository(self.base), max_records=2)
+        self.assertTrue(recovered.was_executed("event-3"))
+
+    def test_no_readable_copy_at_all_still_raises(self):
+        # Recovering further must not become "never complain": storage that is
+        # gone in every copy is an internal fault, and 500 is the right answer.
+        self._journal_with(5, max_records=2)
+        for suffix in ("", ".tmp", ".bak"):
+            if os.path.exists(self._log(suffix)):
+                with open(self._log(suffix), "w") as handle:
+                    handle.write('{"not": "a record"}\nand junk\n')
+        with self.assertRaises(RepositoryCorruptionError):
+            JsonEventJournal(JsonRepository(self.base), max_records=2)
+
 
 class SettingsStoreTests(unittest.TestCase):
     base = os.path.join("tests", ".tmp-settings")
