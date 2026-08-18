@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 
-from run_common import find_panel, mpremote, restore_main, run_on_device
+from run_common import find_panel, mpremote, restore_main, run_on_device, sync_core
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # host/ -> panel/ -> products/ -> repo root.
@@ -49,7 +49,6 @@ PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
            # anyway: the closure rule has no judgement in it, and judgement is
            # what failed here twice. Four file copies is the whole cost.
            "device_page.py", "schedule_add.py", "ui_home.py", "pages.py")
-CITY_DATA = ("cities.json", "cities.py", "__init__.py")
 
 # The suite builds three screens and measures forty city names through each of
 # them, then walks the three list pages up to twice their page capacity to
@@ -69,12 +68,14 @@ def _run_suite(port):
         if mpremote(port, "cp", os.path.join(DEVICE, name), ":" + name) != 0:
             return 1
 
-    # The search logic lives in the brain package, so refresh the city data too.
-    print("== refreshing city data ==")
-    for name in CITY_DATA:
-        mpremote(port, "cp",
-                 os.path.join(ROOT, "src", "smart_kosher", "data", name),
-                 ":/lib/smart_kosher/data/" + name)
+    # The whole brain, not the three data files this used to refresh. The suite
+    # runs against the core as much as against device/, and a core dependency
+    # added in the repo but never copied here is the same stale-copy failure
+    # the payload above exists to prevent -- it happened, on
+    # MAX_ZMAN_OFFSET_MINUTES, and only failed loudly by luck.
+    print("== syncing the brain to /lib ==")
+    if not sync_core(port, ROOT):
+        return 1
 
     print("== running ==")
     rc = run_on_device(

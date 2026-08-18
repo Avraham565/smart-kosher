@@ -14,13 +14,15 @@ import os
 import subprocess
 import sys
 
-from run_common import find_panel, mpremote, restore_main, run_on_device
+from run_common import find_panel, mpremote, restore_main, run_on_device, sync_core
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # host/ -> panel/ -> products/ -> repo root.
 ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
 DEVICE = os.path.join(HERE, os.pardir, "device")
 HWTEST = os.path.join(HERE, os.pardir, "hwtest")
+
+SUITE = "hwtest_zmanim.py"
 GOLDEN = os.path.join(ROOT, "tests", "data", "zmanim_golden.csv.gz")
 
 # Our key -> reference column, same mapping the host suite uses.
@@ -42,8 +44,14 @@ RUN_TIMEOUT_S = 600
 def _read_device(port):
     """Upload the suite, run it, and return what it printed (None on failure)."""
     print("== uploading ==")
-    if mpremote(port, "cp", os.path.join(HWTEST, "hwtest_zmanim.py"),
-                ":hwtest_zmanim.py") != 0:
+    if mpremote(port, "cp", os.path.join(HWTEST, SUITE), ":" + SUITE) != 0:
+        return None
+
+    # This suite compares the device's zmanim against the golden table, so the
+    # zmanim it is comparing had better be the ones in the repo. Nothing here
+    # refreshed them.
+    print("== syncing the brain to /lib ==")
+    if not sync_core(port, ROOT):
         return None
 
     print("== running on device ==")

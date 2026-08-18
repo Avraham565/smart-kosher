@@ -15,12 +15,16 @@ import os
 import subprocess
 import sys
 
-from run_common import find_panel, mpremote, restore_main, run_on_device
+from run_common import find_panel, mpremote, restore_main, run_on_device, sync_core
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# host/ -> panel/ -> products/ -> repo root.
+ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
 # Siblings of host/: what the board runs, and what is uploaded only for a test.
 DEVICE = os.path.join(HERE, os.pardir, "device")
 HWTEST = os.path.join(HERE, os.pardir, "hwtest")
+
+SUITE = "hwtest.py"
 
 # The bench rig: the older relay drives the newer one's switch input, so
 # commanding it stands in for a person at the wall switch.
@@ -36,7 +40,14 @@ RUN_TIMEOUT_S = 300
 
 def _run_suite(port, args):
     print("== uploading hwtest.py ==")
-    if mpremote(port, "cp", os.path.join(HWTEST, "hwtest.py"), ":hwtest.py") != 0:
+    if mpremote(port, "cp", os.path.join(HWTEST, SUITE), ":" + SUITE) != 0:
+        return 1
+
+    # This suite is almost entirely core: the gateway, the repository, the
+    # codec and the delivery vocabulary all come from /lib. Nothing refreshed
+    # them, so it could pass against a brain several commits old.
+    print("== syncing the brain to /lib ==")
+    if not sync_core(port, ROOT):
         return 1
 
     print("== running ==")

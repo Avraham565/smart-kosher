@@ -102,27 +102,34 @@ def surplus_in_payload(suite_path, payload):
 
 
 def _runners():
-    """(runner, suite_path, payload) for every host runner that uploads one.
+    """(runner, suite_path, payload, source) for every host runner with a SUITE.
 
     Discovered rather than listed, so a fourth suite is covered the day it is
     written instead of the day someone remembers this file.
+
+    Keyed on SUITE alone, not on SUITE *and* PAYLOAD. Requiring both was itself
+    a silent exclusion: a runner that uploaded a suite without declaring a
+    payload simply fell out of the list and went unchecked, which is the same
+    shape as everything else this file guards. A runner that needs no payload
+    now has to prove it, below.
     """
     out = []
     for name in sorted(os.listdir(HOST)):
         if not name.startswith("run_") or not name.endswith(".py"):
             continue
         path = os.path.join(HOST, name)
+        source = _read(path)
         found = {}
-        for node in ast.parse(_read(path)).body:
+        for node in ast.parse(source).body:
             if not isinstance(node, ast.Assign):
                 continue
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id in ("SUITE",
                                                                   "PAYLOAD"):
                     found[target.id] = ast.literal_eval(node.value)
-        if "PAYLOAD" in found and "SUITE" in found:
+        if "SUITE" in found:
             out.append((name, os.path.join(HWTEST, found["SUITE"]),
-                        set(found["PAYLOAD"])))
+                        set(found.get("PAYLOAD", ())), source))
     return out
 
 
@@ -130,10 +137,10 @@ class PayloadTests(unittest.TestCase):
     def setUp(self):
         self.runners = _runners()
         # If this ever empties, the test would pass by testing nothing.
-        self.assertTrue(self.runners, "no host runner declares a PAYLOAD")
+        self.assertTrue(self.runners, "no host runner declares a SUITE")
 
     def test_every_module_the_suite_loads_is_uploaded(self):
-        for runner, suite, payload in self.runners:
+        for runner, suite, payload, _ in self.runners:
             with self.subTest(runner=runner):
                 missing = missing_from_payload(suite, payload)
                 self.assertEqual(
@@ -144,7 +151,7 @@ class PayloadTests(unittest.TestCase):
     def test_the_payload_carries_nothing_the_suite_never_loads(self):
         # Not cosmetic: dead weight in the list is how a reader stops trusting
         # it, and an untrusted list is one nobody updates.
-        for runner, suite, payload in self.runners:
+        for runner, suite, payload, _ in self.runners:
             with self.subTest(runner=runner):
                 extra = surplus_in_payload(suite, payload)
                 self.assertEqual(
@@ -153,13 +160,34 @@ class PayloadTests(unittest.TestCase):
                         runner, ", ".join(extra)))
 
     def test_every_uploaded_name_exists(self):
-        for runner, _, payload in self.runners:
+        for runner, _, payload, _ in self.runners:
             with self.subTest(runner=runner):
                 for name in sorted(payload):
                     self.assertTrue(
                         os.path.exists(os.path.join(DEVICE, name)),
                         "{} uploads {}, which is not in device/".format(
                             runner, name))
+
+    def test_every_runner_refreshes_the_brain(self):
+        """The core is the other half of what a suite runs, and had no guard.
+
+        Every suite here imports smart_kosher: the UI one for city search and
+        the schedule vocabulary, the Zigbee one for the gateway and the
+        delivery statuses, the zmanim one for the very code it is comparing
+        against the golden table. None of them refreshed /lib, so all three
+        could pass against a brain several commits old -- and one did fail on
+        exactly that, loudly and by luck, on a constant that exists in the repo.
+
+        Checked as "calls sync_core", not as "copies some files": the point of
+        that helper is that the payload is the directory, so a runner picking
+        core files by hand is the failure this is guarding against.
+        """
+        for runner, _, _, source in self.runners:
+            with self.subTest(runner=runner):
+                self.assertIn(
+                    "sync_core(", source,
+                    "{} uploads a suite but never refreshes /lib, so it can "
+                    "test a stale brain".format(runner))
 
     def test_the_check_reports_a_name_dropped_from_the_payload(self):
         """The guard must fail when it should. That is the entire point.
@@ -175,7 +203,7 @@ class PayloadTests(unittest.TestCase):
         A closure that stopped following imports inside functions, or one that
         came back empty, fails here.
         """
-        for runner, suite, payload in self.runners:
+        for runner, suite, payload, _ in self.runners:
             with self.subTest(runner=runner):
                 self.assertEqual(missing_from_payload(suite, payload), [],
                                  "baseline is not clean, nothing below means "

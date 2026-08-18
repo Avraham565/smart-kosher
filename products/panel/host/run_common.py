@@ -16,8 +16,10 @@ one place to get it right.
 """
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 # The CrowPanel's USB bridge. It renumbers itself between COM7 and COM8 across
@@ -54,6 +56,52 @@ def mpremote(port, *args, **kwargs):
                               encoding="utf-8", errors="replace",
                               timeout=timeout)
     return subprocess.call(cmd, timeout=timeout)
+
+
+def sync_core(port, root):
+    """Copy src/smart_kosher onto the board at /lib, as a directory.
+
+    Every suite here runs against the brain, and until now no launcher
+    refreshed it. The UI suite refreshed three files out of the data package
+    and nothing else, so a suite that had grown a new core dependency ran
+    against whatever the board was carrying -- which is how a run reported
+    ImportError on a constant that exists in the repo.
+
+    A directory rather than a list, deliberately. Two hand-maintained payloads
+    produced two false greens in one day: the UI suite's module list was
+    missing fourteen names, and the brain was missing entirely. deploy.ps1
+    reached this conclusion first and says why -- "The payload is the
+    directory, not a list" -- and following a decision already made in this
+    repo beats inventing a cleverer one beside it.
+
+    It costs about 21 seconds, every run, and that is measured rather than
+    guessed: three consecutive calls against a board where nothing had changed
+    took 20.9s, 20.7s and 20.9s. mpremote skips writing a file whose content
+    already matches, but it still walks and compares the whole package, so
+    "unchanged" is nearly as expensive as changed. An earlier draft of this
+    docstring claimed the steady state was close to free; it is not.
+
+    That is the price and it was paid deliberately. Syncing only the files a
+    suite imports would need a second closure, crossing from the flat board
+    namespace into smart_kosher.*, added to a mechanism that produced two false
+    greens in one day. Caching a "board already matches" marker on the host is
+    worse still: deploy.ps1 and any second checkout also write /lib, so the
+    marker would be a guess about the board derived from this machine, and a
+    wrong one is exactly the stale-copy failure being closed here.
+
+    Staged without __pycache__: MicroPython ignores CPython .pyc, so shipping
+    them only wastes flash.
+    """
+    source = os.path.join(root, "src", "smart_kosher")
+    stage = tempfile.mkdtemp(prefix="sk_core_")
+    try:
+        shutil.copytree(source, os.path.join(stage, "smart_kosher"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        mpremote(port, "mkdir", ":/lib")        # already there: not an error
+        return mpremote(port, "cp", "-r",
+                        os.path.join(stage, "smart_kosher"), ":/lib/") == 0
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 # How long to listen to the console after a run went quiet, for the reason.
