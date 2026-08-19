@@ -22,8 +22,12 @@ import time
 
 import lvgl as lv
 
-# LVGL serviced ~200x/s -- negligible against a ~51 Hz frame, and near-free at
-# idle (the await yields the core between cycles).
+# The sleep is 5ms but a cycle costs ~10ms: _handler() itself takes about as
+# long again, so LVGL is serviced ~99.6x/s on the board -- not the ~200 the
+# interval alone implies, which is true only for an instant handler. Measured,
+# with the arithmetic: docs/panel-update-model.md. Still negligible against a
+# ~51 Hz frame, and near-free at idle (the await yields the core between
+# cycles).
 _PUMP_INTERVAL_MS = 5
 
 _handler = getattr(lv, "timer_handler", None) or getattr(lv, "task_handler", None)
@@ -32,7 +36,7 @@ _handler = getattr(lv, "timer_handler", None) or getattr(lv, "task_handler", Non
 # This pump is the one whose death is invisible: the RGB DMA keeps scanning out
 # the last frame whatever the software does (host/clean_board.py), so a frozen
 # count is the only symptom a wedged UI has. A plain counter, deliberately --
-# no timestamp, no history, nothing that allocates per cycle at 200 Hz.
+# no timestamp, no history, nothing that allocates per cycle at ~100 Hz.
 beats = 0
 
 
