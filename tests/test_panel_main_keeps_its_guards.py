@@ -19,12 +19,18 @@ of main.py's coverage, and it pins one string.
 So: structural, on the AST, in the pattern of
 tests/test_core_is_micropython_safe.py. Deliberately no refactor of main.py to
 make it importable -- rewriting the composition root is a far bigger risk than
-these four claims are worth, and a structural check does not need it.
+these claims are worth, and a structural check does not need it.
 
 Each claim below is written so that removing the thing it names makes it red;
-that was checked by breaking all four in turn. A structural test is exactly
-where a claim that passes on every input gets written by accident, so a green
-run here is only evidence while that stays true.
+that was checked by breaking each in turn, and by mutations chosen by someone
+other than their author. A structural test is exactly where a claim that
+passes on every input gets written by accident, so a green run here is only
+evidence while that stays true.
+
+The width of the caught exception is here because the first version of this
+file missed it: it pinned that the try existed and that the handler yielded,
+which left `except Exception` free to become `except OSError` with all six --
+then five -- still green, and the guard hollow.
 """
 
 import ast
@@ -104,6 +110,44 @@ class PanelMainGuardTests(unittest.TestCase):
             "_zigbee_reader catches the UART error but never awaits in the "
             "handler; a read that always faults spins the loop and starves "
             "LVGL and the scheduler")
+
+    def test_the_handler_catches_the_full_width_of_Exception(self):
+        # Narrowing the caught type restores the original bug for everything
+        # outside it, with the try and the backoff both still in place and
+        # still looking right. Not via the framing path -- process_line
+        # catches uart_decode's ValueError itself and returns False, so a
+        # corrupt frame never reaches here -- but it calls _handle_async
+        # unguarded, and an AttributeError out of _ieee_for_short (a registry
+        # entry that is not a dict) escapes into the gather exactly as before.
+        #
+        # BaseException is rejected rather than waved through as "wider
+        # still". It also swallows CancelledError, so the task can no longer
+        # be stopped, and KeyboardInterrupt -- which host/clean_board.py spams
+        # as Ctrl-C to catch main.py before it starts. That is the mechanism
+        # keeping a deploy from writing onto a board with live DMA, so eating
+        # it here trades a caught error for a corrupt filesystem: a change of
+        # behaviour, not a hardening. A bare except is the same semantics once
+        # more, and is already ruff E722 under this repo's select list.
+        tries = self._guarded_tries()
+        # Without this the loop below asserts nothing when the try is gone
+        # altogether, and this test goes green on the one input it should
+        # have the least to say about. The regression is caught either way,
+        # by the two tests above -- but an assertion that holds on every
+        # input is the thing this file exists to not contain.
+        self.assertTrue(tries, "no guarded try to read the caught type from")
+        for node in tries:
+            caught = set(handler.type.id for handler in node.handlers
+                         if isinstance(handler.type, ast.Name))
+            self.assertNotIn(
+                "BaseException", caught,
+                "the UART handler catches BaseException; that swallows "
+                "CancelledError and the Ctrl-C clean_board.py depends on, "
+                "which is a change of behaviour and not a wider guard")
+            self.assertIn(
+                "Exception", caught,
+                "the UART handler no longer catches Exception; everything "
+                "outside the narrower type escapes into the gather and ends "
+                "the reader -- the exact bug the try was added for")
 
     def test_the_gather_contains_a_raise_rather_than_unwinding(self):
         # Without return_exceptions the first raise unwinds through gather,
