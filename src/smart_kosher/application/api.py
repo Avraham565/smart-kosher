@@ -395,6 +395,9 @@ class Api:
             "device_time": _device_time_string(),
             "uptime_seconds": int(time.time() - self._started),
             "settings_load_error": getattr(self._settings, "load_error", None),
+            "zigbee_registry_load_error": (
+                getattr(self._zigbee, "registry_load_error", None)
+                if self._zigbee is not None else None),
             "memory": _memory_info(),
             # A fresh MicroPython boot reads 2000-01-01 until the RTC is set.
             "clock_unset": now[0] < MIN_VALID_YEAR,

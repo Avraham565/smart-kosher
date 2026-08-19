@@ -181,6 +181,34 @@ class ZigbeeOpsTests(unittest.TestCase):
                 dispatch(api, "zigbee.permit_join", {"duration": bad})
 
 
+    def test_status_surfaces_a_corrupt_zigbee_registry(self):
+        # The gateway keeps the reason on the instance rather than swapping a
+        # corrupt registry for an empty one, in the pattern SettingsStore.
+        # load_error set -- but the half that pattern exists for is the report,
+        # and without this the whole symptom is a console line nobody watches
+        # and a panel showing zero devices.
+        zigbee = FakeZigbee()
+        zigbee.registry_load_error = "zigbee_devices.json: invalid syntax"
+        data = dispatch(self._api(zigbee), "status.get", {})
+        self.assertEqual("zigbee_devices.json: invalid syntax",
+                         data["zigbee_registry_load_error"])
+
+    def test_status_reports_no_registry_error_when_it_loaded(self):
+        zigbee = FakeZigbee()
+        zigbee.registry_load_error = None
+        data = dispatch(self._api(zigbee), "status.get", {})
+        self.assertIsNone(data["zigbee_registry_load_error"])
+
+    def test_status_carries_the_field_without_a_gateway_that_has_one(self):
+        # Read through getattr: a gateway stub need not carry the attribute,
+        # and product B composes an Api with no gateway at all. Neither may
+        # turn status.get into a 500.
+        for gateway in (FakeZigbee(), None):
+            with self.subTest(gateway=type(gateway).__name__):
+                data = dispatch(self._api(gateway), "status.get", {})
+                self.assertIsNone(data["zigbee_registry_load_error"])
+
+
 class FakeClock:
     def __init__(self, now):
         self._now = now
