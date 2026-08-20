@@ -69,6 +69,16 @@ Write-Host "== removing old package on device (avoids stale .py/.mpy shadowing) 
 Invoke-Expression "$mp run `"$device\device_cleanup.py`""
 
 Write-Host "== copying smart_kosher package to /lib =="
+# /lib must exist first. mpremote copies *into* the destination only when it is
+# already a directory; on a fresh board it treats the missing path as the
+# destination name instead, so the package lands as /lib/application/... rather
+# than /lib/smart_kosher/application/... . The board then fails its import at
+# boot and reset-loops every five seconds -- with no USB channel to recover
+# through, because the channel is the thing that failed to import.
+# products/panel/host/deploy.ps1 has carried this line for the same reason.
+# Deliberately unchecked, unlike every call below: on a board that has been
+# deployed before this fails with "already exists", which is the normal case.
+Invoke-Expression "$mp fs mkdir :/lib" 2>&1 | Out-Null
 Invoke-Expression "$mp fs cp -r `"$stage\smart_kosher`" :/lib/"
 
 if ($WithMicrodot) {
