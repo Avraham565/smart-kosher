@@ -67,6 +67,12 @@ _DEFAULT_ACK_TIMEOUT_MS = 1500
 _BREAKER_THRESHOLD = 2          # consecutive timeouts before failing fast
 _WATCHDOG_UP_MS = 30000         # heartbeat ping interval while link is up
 _WATCHDOG_DOWN_MS = 2000        # re-probe interval while link is down
+# A probe that never reports back must not hold the lock forever. Same
+# reasoning as _REPORTING_INFLIGHT_MS: an in-flight marker that only a
+# completion path can clear is a latch, not a lock. Comfortably longer
+# than the ping it guards (_DEFAULT_ACK_TIMEOUT_MS), so it can never
+# expire under a probe that is still legitimately running.
+_PROBE_INFLIGHT_MS = 8000
 
 # Enabling reporting is bind + configure_reporting *on the device*, and either
 # half can fail after the command itself was accepted -- the outcome only
@@ -127,7 +133,11 @@ class ZigbeeGateway(DeviceGateway):
         # for a dead coordinator link.
         self._ping_timeouts = 0
         self._down = False
-        self._probe_inflight = False
+        # Probe lock expiry, or None when no probe is in flight. A
+        # deadline rather than a flag because the only other way out is
+        # the probe's own finally, and a task collected before it runs
+        # never gets there.
+        self._probe_inflight = None
         # ieee -> True when a command to the device timed out while the
         # coordinator link was fine (classic stale-short_addr rejoin);
         # cleared by any report/rejoin from the device.
@@ -674,21 +684,34 @@ class ZigbeeGateway(DeviceGateway):
 
     def _probe_link(self):
         """Fire one background ping to classify a command timeout. At most
-        one probe in flight — a burst of timeouts must not ping-storm."""
-        if self._probe_inflight or self._down:
+        one probe in flight — a burst of timeouts must not ping-storm.
+
+        The lock carries an expiry for the same reason ``_reporting_inflight``
+        does. It is raised *before* the task exists, and the only other way it
+        comes down is that task's own ``finally``; a task collected before it
+        first runs never reaches one, and this is deliberately fire-and-forget
+        (CLAUDE.md names it as one of two such places). A bare flag would then
+        stay raised for the life of the process, every later probe would turn
+        around at the gate below, and the breaker would lose its evidence
+        permanently and silently.
+        """
+        if self._down:
+            return
+        if (self._probe_inflight is not None
+                and ticks_diff(self._probe_inflight, ticks_ms()) > 0):
             return
 
         async def probe():
             try:
                 await self.ping()
             finally:
-                self._probe_inflight = False
+                self._probe_inflight = None
 
-        self._probe_inflight = True
+        self._probe_inflight = ticks_add(ticks_ms(), _PROBE_INFLIGHT_MS)
         try:
             asyncio.create_task(probe())
         except Exception:
-            self._probe_inflight = False
+            self._probe_inflight = None
 
     async def watchdog(self):
         """Heartbeat task: slow pings while the link is up, fast re-probes

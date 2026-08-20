@@ -12,8 +12,14 @@ import asyncio
 import os
 import tempfile
 import unittest
+from unittest import mock
 
-from smart_kosher.adapters import MemoryRepository, uart_decode, uart_encode
+from smart_kosher.adapters import (
+    MemoryRepository,
+    uart_decode,
+    uart_encode,
+    zigbee_gateway,
+)
 from smart_kosher.adapters.memory_repository import MemoryEventJournal
 from smart_kosher.adapters.zigbee_gateway import ZigbeeGateway, ticks_ms
 from smart_kosher.application.control_service import ControlService
@@ -209,6 +215,75 @@ class BreakerTests(GatewayTestCase):
         result = run(self.gateway.ping())
         self.assertEqual("sent_to_zigbee", result["status"])
         self.assertFalse(self.gateway.status_info()["link_down"])
+
+
+class _NoLoop:
+    """Stands in for the gateway module's ``asyncio``: create_task accepts a
+    coroutine and never schedules it.
+
+    This is the whole point of the test below. ``_probe_link`` is deliberately
+    fire-and-forget, so on the device its task can be collected before it ever
+    runs -- and a task that never runs never reaches the ``finally`` that
+    lowers the lock. CPython's loop keeps a created task alive, so no amount of
+    sleeping reproduces it here (which is exactly why
+    ``test_device_timeout_marks_suspect_but_not_link_down`` passed over this
+    defect for months). Dropping the coroutine reaches the same end state
+    deliberately, and without depending on when a collector runs.
+    """
+
+    def __init__(self):
+        self.created = []
+
+    def create_task(self, coro):
+        coro.close()          # it will never run; do not warn that it did not
+        self.created.append(coro)
+        return None
+
+
+class ProbeLockTests(GatewayTestCase):
+    """The probe lock has to be a lock, not a latch."""
+
+    def test_a_probe_task_that_never_runs_does_not_latch_the_lock(self):
+        loop = _NoLoop()
+        with mock.patch.object(zigbee_gateway, "asyncio", loop):
+            self.gateway._probe_link()
+            self.assertEqual(1, len(loop.created))
+            self.assertIsNotNone(self.gateway._probe_inflight)
+
+            # Inside the window the lock holds -- that is its actual job, and
+            # the fix must not cost it.
+            self.gateway._probe_link()
+            self.assertEqual(1, len(loop.created),
+                             "a second probe went out while one was in flight")
+
+            # Now past the deadline, with that first probe's finally never
+            # having run. Read the deadline off the gateway rather than
+            # recomputing it, so the jump cannot land a millisecond short.
+            expired = self.gateway._probe_inflight + 1
+            with mock.patch.object(zigbee_gateway, "ticks_ms",
+                                   lambda: expired):
+                self.gateway._probe_link()
+
+        self.assertEqual(
+            2, len(loop.created),
+            "the lock never came down: one collected probe task would "
+            "suppress every future probe for the life of the process, and "
+            "the breaker would lose its evidence silently")
+
+    def test_the_lock_still_clears_the_ordinary_way(self):
+        # The expiry is a backstop, not the mechanism. A probe that does run
+        # must release the lock immediately, not hold it for _PROBE_INFLIGHT_MS.
+        self.join_device()
+
+        async def scenario():
+            self.uart.autoresponder = lambda m: (
+                [ack_for(m, {"network_up": True})] if m["op"] == "ping"
+                else None)
+            await self.gateway.send(make_event("on"))     # times out -> probes
+            await asyncio.sleep(0.05)                     # let the probe finish
+
+        run(scenario())
+        self.assertIsNone(self.gateway._probe_inflight)
 
 
 class ToggleTests(GatewayTestCase):
