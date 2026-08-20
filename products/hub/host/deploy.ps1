@@ -35,6 +35,20 @@ if ($Python -eq "") {
 $mp = "& `"$Python`" -m mpremote"
 if ($Port -ne "") { $mp = "$mp connect $Port" }
 
+# $ErrorActionPreference = "Stop" does not apply to native executables in
+# PowerShell 5.1 -- which is the shell this script's own header tells you to
+# run it under -- so a failing mpremote used to print its error and let the
+# script sail on to the next step. The worst shape of that is silent: a copy
+# fails, the reset still happens, the script prints "Done", and the board comes
+# up running whatever mixture of old and new files it happens to hold.
+# The mpy-cross loop below already checked $LASTEXITCODE; mpremote never did.
+function Invoke-Mp($command, $what) {
+    Invoke-Expression $command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$what failed (mpremote exit $LASTEXITCODE)"
+    }
+}
+
 Write-Host "== staging clean copy (no __pycache__) =="
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage | Out-Null
@@ -66,7 +80,7 @@ if ($StageOnly) {
 }
 
 Write-Host "== removing old package on device (avoids stale .py/.mpy shadowing) =="
-Invoke-Expression "$mp run `"$device\device_cleanup.py`""
+Invoke-Mp "$mp run `"$device\device_cleanup.py`"" "device cleanup"
 
 Write-Host "== copying smart_kosher package to /lib =="
 # /lib must exist first. mpremote copies *into* the destination only when it is
@@ -79,7 +93,7 @@ Write-Host "== copying smart_kosher package to /lib =="
 # Deliberately unchecked, unlike every call below: on a board that has been
 # deployed before this fails with "already exists", which is the normal case.
 Invoke-Expression "$mp fs mkdir :/lib" 2>&1 | Out-Null
-Invoke-Expression "$mp fs cp -r `"$stage\smart_kosher`" :/lib/"
+Invoke-Mp "$mp fs cp -r `"$stage\smart_kosher`" :/lib/" "copying smart_kosher"
 
 if ($WithMicrodot) {
     Write-Host "== copying microdot (first deploy) =="
@@ -89,15 +103,15 @@ if ($WithMicrodot) {
     $src = & $Python -c "import microdot, os; print(os.path.dirname(microdot.__file__))"
     Copy-Item "$src\__init__.py" "$microdot\microdot\"
     Copy-Item "$src\microdot.py" "$microdot\microdot\"
-    Invoke-Expression "$mp fs cp -r `"$microdot\microdot`" :/lib/"
+    Invoke-Mp "$mp fs cp -r `"$microdot\microdot`" :/lib/" "copying microdot"
 }
 
 # main.py last, after every module it imports is already on the device.
 Write-Host "== copying main.py =="
-Invoke-Expression "$mp fs cp `"$device\main.py`" :main.py"
+Invoke-Mp "$mp fs cp `"$device\main.py`" :main.py" "copying main.py"
 
 Write-Host "== resetting device =="
-Invoke-Expression "$mp reset"
+Invoke-Mp "$mp reset" "device reset"
 
 Write-Host ""
 Write-Host "Done. Now:"
