@@ -207,6 +207,48 @@ class BreakerTests(GatewayTestCase):
         result = run(self.gateway.send(make_event("on")))
         self.assertEqual("sent_to_zigbee", result["status"])
 
+    def test_a_ping_in_flight_does_not_disarm_the_breaker(self):
+        # The bypass a ping needs is a property of that request, not of the
+        # link. Clearing _down for the duration of the await handed the
+        # bypass to everything else on the loop: while the link is down the
+        # watchdog sits inside this await for 1500 of every 3500 ms, and in
+        # that window commands reach the wire, time out one by one, and
+        # _deliver_one writes every one of their devices off as unreachable.
+        # A group schedule for fifty lamps against an unplugged coordinator
+        # marked fifty healthy switches faulty.
+        self.join_device()
+        self._open_breaker()
+
+        async def scenario():
+            ping = asyncio.ensure_future(self.gateway.ping())
+            await asyncio.sleep(0)          # let it reach its await
+            self.assertIn("ping", self.written_ops(),
+                          "the ping never started; the window is not open")
+            writes_before = len(self.uart.written)
+            result = await self.gateway.send(make_event("on"))
+            await ping
+            return result, writes_before
+
+        result, writes_before = run(scenario())
+
+        self.assertEqual("error", result["status"])
+        self.assertIn("coordinator_down", result["error"])
+        self.assertEqual(writes_before, len(self.uart.written),
+                         "a command reached the wire while the breaker was open")
+        self.assertFalse(self.gateway.devices()[IEEE].get("unreachable"),
+                         "a healthy device was written off during a ping")
+
+    def test_a_ping_that_fails_leaves_the_breaker_open(self):
+        # The other direction: the bypass must not become a way out of the
+        # breaker. A ping nobody answers leaves the link exactly as down as
+        # it found it.
+        self.join_device()
+        self._open_breaker()
+
+        run(self.gateway.ping())
+
+        self.assertTrue(self.gateway.status_info()["link_down"])
+
     def test_ping_probes_the_wire_even_while_down(self):
         self.join_device()
         self._open_breaker()

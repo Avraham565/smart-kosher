@@ -629,8 +629,14 @@ class ZigbeeGateway(DeviceGateway):
         self._uart.write(uart_encode(msg))
         return rid
 
-    async def _command(self, op, payload, rid=None, timeout_ms=None):
-        if self._down:
+    async def _command(self, op, payload, rid=None, timeout_ms=None,
+                       ignore_breaker=False):
+        # ignore_breaker is per request on purpose. The heartbeat has to reach
+        # the wire while the breaker is open, but it is the only thing that
+        # does, and the way it used to buy itself that -- clearing self._down
+        # for the length of its own await -- handed the same exemption to
+        # every other caller on the loop.
+        if self._down and not ignore_breaker:
             return {"status": "error", "error": "coordinator_down",
                     "command_id": rid or op}
         if rid is None:
@@ -945,16 +951,22 @@ class ZigbeeGateway(DeviceGateway):
     # ── pairing / maintenance ops (exposed via Api) ────────────────────
 
     async def ping(self):
-        # The watchdog's re-probe must reach the wire even while the
-        # breaker is open, so bypass the fail-fast check in _command.
-        was_down, self._down = self._down, False
-        result = await self._command("ping", None)
-        # Set membership, not one literal. _ack_status keeps ping on
-        # sent_to_zigbee today, but a future rung would silently re-latch the
-        # breaker here -- which is exactly how this broke the first time.
-        if result["status"] not in EXECUTION_SUCCESS_STATUSES and was_down:
-            self._down = True
-        return result
+        """The heartbeat, and the only command that outranks the breaker.
+
+        It has to reach the wire while the link is down -- that is how the
+        link is ever found to be up again. It used to buy that by setting
+        self._down to False across its own await and putting it back
+        afterwards, which disarmed the fail-fast for everything else for as
+        long as the ping ran: while down, the watchdog is inside that await
+        for 1500 of every 3500 ms, and a group send landing in the window
+        reached the wire, timed out per member, and had every one of its
+        devices marked unreachable by _deliver_one.
+
+        Nothing has to put the breaker back now, because nothing takes it
+        down. A ping that is answered clears it in process_line like any other
+        inbound frame, and a ping that times out is counted by _command.
+        """
+        return await self._command("ping", None, ignore_breaker=True)
 
     async def permit_join(self, duration):
         return await self._command("permit_join", {"duration": duration})
