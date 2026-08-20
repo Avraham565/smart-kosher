@@ -1282,6 +1282,61 @@ class SendNeverRaisesTests(GatewayTestCase):
         self.assertIn("something below broke", result["error"])
 
 
+class ManualConfirmationEndpointTests(GatewayTestCase):
+    """The gang question, end to end through ControlService.
+
+    Task 12 taught wait_for_report to tell the gangs apart; nothing passed it
+    an endpoint, so in the product the primitive was still answering "any
+    gang". This is the wiring, and it is the only test that exercises the path
+    a user actually takes: press a switch in the UI, ask for confirmation.
+    """
+
+    def _service(self):
+        return ControlService(
+            Executor(self.gateway, MemoryEventJournal()), self.repo)
+
+    def _send_with_report(self, report):
+        async def scenario():
+            self.uart.autoresponder = lambda m: (
+                [ack_for(m), report] if m["op"] == "on_off" else [ack_for(m)])
+            return await self._service().send(
+                "endpoint", "ep1", "on", confirm_ms=60)
+
+        return run(scenario())
+
+    def test_the_other_gang_does_not_confirm_a_manual_send(self):
+        # The command went to gang 1 and was lost; the user reached over and
+        # pressed gang 2. observed_state is journalable, so confirming here
+        # records a command as delivered that never arrived.
+        self.join_device()
+        outcome = self._send_with_report(report_event(True, endpoint=2))
+        self.assertFalse(outcome["confirmation"]["confirmed"],
+                         "gang 2's report confirmed a command sent to gang 1")
+
+    def test_its_own_gang_does_confirm_a_manual_send(self):
+        self.join_device()
+        outcome = self._send_with_report(report_event(True, endpoint=1))
+        self.assertTrue(outcome["confirmation"]["confirmed"])
+
+    def test_the_endpoint_confirmed_on_is_the_one_commanded(self):
+        # The entity's zigbee_endpoint beats the registry's on the command path
+        # (test_zigbee_endpoint_on_entity_overrides_registry). Confirmation has
+        # to agree with that, or it waits on a gang we never addressed.
+        self.join_device(endpoint=1)
+        self.repo.upsert("endpoints", {
+            "id": "ep1", "name": "boiler", "ieee_address": IEEE,
+            "zigbee_endpoint": 3})
+
+        outcome = self._send_with_report(report_event(True, endpoint=1))
+
+        cmd = [m for m in self.uart.written if m["op"] == "on_off"][-1]
+        self.assertEqual(3, cmd["payload"]["endpoint"])
+        self.assertFalse(
+            outcome["confirmation"]["confirmed"],
+            "the command went to endpoint 3 and only endpoint 1 answered, so "
+            "nothing confirmed it -- an honest no, not a false yes")
+
+
 class MaintenanceOpsTests(GatewayTestCase):
     def test_ping_updates_liveness_info(self):
         self.uart.autoresponder = lambda m: [{

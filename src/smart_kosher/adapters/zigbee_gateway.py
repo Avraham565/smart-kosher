@@ -960,6 +960,32 @@ class ZigbeeGateway(DeviceGateway):
         entity = self._repo.get_by_id("endpoints", endpoint_id)
         return entity.get("ieee_address") if entity else None
 
+    def confirm_target(self, endpoint_id):
+        """``(ieee, zcl_endpoint)`` a command to this entity would address.
+
+        Answered here rather than worked out by the caller because the caller
+        cannot: resolving the endpoint means letting the entity's
+        zigbee_endpoint override the registry's, and that needs the registry
+        entry, which only this class holds. A second copy of that rule
+        somewhere else is a copy that drifts, and this one decides which gang
+        a confirmation waits on.
+
+        Same resolution the command takes, deliberately. If the command went to
+        endpoint 3 and only endpoint 1 ever reports, the confirmation must fail
+        -- nothing answered from where we commanded, so nothing was delivered,
+        and "unconfirmed" is the honest answer. Falling back to the registry's
+        endpoint would confirm on a report from a gang we never addressed,
+        which is the false positive this whole line of work exists to remove.
+
+        None when the entity is unknown, unpaired, or never joined -- the cases
+        where the command itself would not have gone out either.
+        """
+        try:
+            ieee, _short, zcl_ep = self._resolve_endpoint(endpoint_id)
+        except ValueError:
+            return None
+        return ieee, zcl_ep
+
     # ── pairing / maintenance ops (exposed via Api) ────────────────────
 
     async def ping(self):

@@ -60,10 +60,22 @@ class ControlService:
             gateway = getattr(self._executor, "gateway", None)
             waiter = getattr(gateway, "wait_for_report", None)
             ieee = entity.get("ieee_address")
+            # Which gang to wait on, from the gateway that resolved it. This
+            # module holds the entity but not the Zigbee registry entry, so it
+            # cannot redo that resolution without keeping a second copy of the
+            # rule -- and the two would drift. A gateway that cannot answer
+            # leaves the endpoint unknown, which is the pre-endpoint behaviour.
+            zcl_endpoint = None
+            resolver = getattr(gateway, "confirm_target", None)
+            if resolver is not None:
+                target = resolver(target_id)
+                if target:
+                    ieee, zcl_endpoint = target
             if waiter is not None and ieee:
                 outcome = dict(outcome)
                 outcome["confirmation"] = await waiter(
-                    ieee, action_type == "on", confirm_ms)
+                    ieee, action_type == "on", confirm_ms,
+                    endpoint=zcl_endpoint)
         return outcome
 
 
