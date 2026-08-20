@@ -122,11 +122,17 @@ class ZigbeeGateway(DeviceGateway):
         # anything we merely believe, so nothing else may write here.
         self._states = {}
         self._state_ms = {}
+        # ieee -> the endpoint the last report came from, or None when it
+        # did not say. Companion to _states, NOT a re-keying of it: which
+        # gang owns which state is the known multi-gang gap and a separate
+        # job. This exists so a waiter that named a gang cannot be answered
+        # by its neighbour.
+        self._state_ep = {}
         # ieee -> bool we last commanded and have no reason to doubt. Kept
         # apart from _states for the reason above; cleared the moment the
         # device actually says something.
         self._expected = {}
-        # ieee -> [asyncio.Event, ...] — observed-state waiters
+        # ieee -> [(asyncio.Event, endpoint or None), ...] — state waiters
         self._state_waiters = {}
         # circuit breaker — moved ONLY by ping outcomes: a device that
         # dropped off the mesh times out too, and must not be mistaken
@@ -533,6 +539,7 @@ class ZigbeeGateway(DeviceGateway):
         self._registry.pop(ieee, None)
         self._states.pop(ieee, None)
         self._state_ms.pop(ieee, None)
+        self._state_ep.pop(ieee, None)
         self._expected.pop(ieee, None)
         self._suspect.pop(ieee, None)
         self._reporting_retry.pop(ieee, None)
@@ -543,12 +550,23 @@ class ZigbeeGateway(DeviceGateway):
         ieee = self._ieee_for_short(payload.get("short_addr"))
         if not ieee or "on_off" not in payload:
             return
+        endpoint = payload.get("endpoint")
         self._expected.pop(ieee, None)   # the device spoke; stop guessing
         self._states[ieee] = bool(payload["on_off"])
         self._state_ms[ieee] = ticks_ms()
+        self._state_ep[ieee] = endpoint
         self._suspect.pop(ieee, None)  # it spoke — clearly reachable
-        for evt in self._state_waiters.pop(ieee, []):
-            evt.set()
+        # Waking every waiter for the ieee is what let gang 2's report confirm
+        # a command sent to gang 1. A waiter this report cannot answer stays
+        # registered, so a later report from its own gang still reaches it.
+        still_waiting = []
+        for entry in self._state_waiters.pop(ieee, []):
+            if _endpoint_admits(entry[1], endpoint):
+                entry[0].set()
+            else:
+                still_waiting.append(entry)
+        if still_waiting:
+            self._state_waiters[ieee] = still_waiting
 
     def _ieee_for_short(self, short):
         for ieee, entry in self._registry.items():
@@ -558,30 +576,41 @@ class ZigbeeGateway(DeviceGateway):
 
     # ── observed-state confirmation (ACK level 4) ──────────────────────
 
-    async def wait_for_report(self, ieee, expect, timeout_ms):
+    async def wait_for_report(self, ieee, expect, timeout_ms, endpoint=None):
         """Await attribute_report(s) from ``ieee`` until one says
         ``expect`` or the timeout passes. Returns a confirmation dict —
         this is the device's own word, not an ack echo.
 
         The current state is checked before each wait: the report often
         lands in the same burst as the command's ack, i.e. before the
-        caller starts waiting, and must still count."""
+        caller starts waiting, and must still count.
+
+        ``endpoint`` names which gang the caller is asking about. Without it,
+        or against firmware too old to say which gang reported, behaviour is
+        exactly what it was — which is what keeps every existing caller
+        working. With it, a two-gang device can no longer confirm a command
+        to gang 1 because the user happened to press gang 2: that returned
+        {"confirmed": True} for a command that was never delivered, and
+        observed_state is journalable.
+        """
         deadline = ticks_add(ticks_ms(), timeout_ms)
         while True:
-            if self._states.get(ieee) == expect:
+            if (self._states.get(ieee) == expect
+                    and _endpoint_admits(endpoint, self._state_ep.get(ieee))):
                 return {"confirmed": True, "observed": expect}
             remaining = ticks_diff(deadline, ticks_ms())
             if remaining <= 0:
                 return {"confirmed": False,
                         "observed": self._states.get(ieee)}
             evt = asyncio.Event()
-            self._state_waiters.setdefault(ieee, []).append(evt)
+            entry = (evt, endpoint)
+            self._state_waiters.setdefault(ieee, []).append(entry)
             try:
                 await asyncio.wait_for(evt.wait(), remaining / 1000)
             except asyncio.TimeoutError:
                 waiters = self._state_waiters.get(ieee, [])
-                if evt in waiters:
-                    waiters.remove(evt)
+                if entry in waiters:
+                    waiters.remove(entry)
                 return {"confirmed": False,
                         "observed": self._states.get(ieee)}
 
@@ -944,6 +973,7 @@ class ZigbeeGateway(DeviceGateway):
         entry = self._registry.pop(ieee, None)
         self._states.pop(ieee, None)
         self._state_ms.pop(ieee, None)
+        self._state_ep.pop(ieee, None)
         self._expected.pop(ieee, None)
         self._save_registry()
         if entry is None:
@@ -961,6 +991,18 @@ class ZigbeeGateway(DeviceGateway):
 # journaled on the strength of the others.
 _STATUS_RANK = ("error", "timeout", "accepted_by_h2", "sent_to_zigbee",
                 "confirmed_by_device", "observed_state")
+
+
+def _endpoint_admits(want, seen):
+    """Whether a report from endpoint ``seen`` may answer a waiter that asked
+    about endpoint ``want``.
+
+    Unknown on either side falls back to the pre-endpoint behaviour: a caller
+    that does not name a gang, and firmware that does not say which gang
+    reported, both keep answering exactly as they did before. Only when both
+    are known can the two disagree, and only then is anything refused.
+    """
+    return want is None or seen is None or want == seen
 
 
 def _worst_status(results):

@@ -37,10 +37,10 @@ def joined_event(ieee=IEEE, short=SHORT, endpoint=1):
                         "endpoint": endpoint}}
 
 
-def report_event(on_off, short=SHORT):
+def report_event(on_off, short=SHORT, endpoint=1):
     return {"version": 1, "type": "event", "op": "attribute_report",
             "payload": {"on_off": on_off, "short_addr": short,
-                        "endpoint": 1}}
+                        "endpoint": endpoint}}
 
 
 def ack_for(msg, payload=None, status="ok"):
@@ -1059,6 +1059,82 @@ class ObservedStateTests(GatewayTestCase):
         outcome = run(control.send("endpoint", "ep1", "on", confirm_ms=200))
         self.assertEqual("executed", outcome["status"])
         self.assertNotIn("confirmation", outcome)
+
+
+class EndpointConfirmationTests(GatewayTestCase):
+    """A two-gang switch is one ieee and one short_addr with two endpoints.
+
+    Confirmation is observed-state — the device's own word — and
+    ``observed_state`` is journalable, so a false confirmation is not a
+    cosmetic bug: it records a command as delivered that never arrived. The
+    scenario is ordinary. Gang 1 is commanded on, the command is lost, and the
+    user reaches over and presses gang 2 by hand.
+
+    These do not touch the known multi-gang gap: ``_states`` is still one bool
+    per ieee and the two gangs still overwrite each other there. Only the
+    waiting path learned to tell them apart.
+    """
+
+    def _wait(self, expect, timeout_ms, endpoint=None, then=None):
+        """Start a wait, let it register, deliver ``then``, return the result."""
+        async def scenario():
+            task = asyncio.ensure_future(self.gateway.wait_for_report(
+                IEEE, expect, timeout_ms, endpoint=endpoint))
+            await asyncio.sleep(0)        # let the waiter register first
+            if then is not None:
+                for event in then:
+                    self.uart.feed(event)
+            return await task
+
+        return run(scenario())
+
+    def test_the_other_gang_does_not_confirm(self):
+        self.join_device()
+        result = self._wait(True, 60, endpoint=1,
+                            then=[report_event(True, endpoint=2)])
+        self.assertFalse(result["confirmed"],
+                         "gang 2's report confirmed a command sent to gang 1")
+
+    def test_the_named_gang_does_confirm(self):
+        self.join_device()
+        result = self._wait(True, 60, endpoint=1,
+                            then=[report_event(True, endpoint=1)])
+        self.assertTrue(result["confirmed"])
+
+    def test_a_waiter_the_neighbour_could_not_answer_survives_for_its_own(self):
+        # The neighbour's report must not silently drop the waiter: the real
+        # gang's report is usually right behind it.
+        self.join_device()
+        result = self._wait(True, 60, endpoint=1,
+                            then=[report_event(True, endpoint=2),
+                                  report_event(True, endpoint=1)])
+        self.assertTrue(result["confirmed"])
+
+    def test_a_leftover_neighbour_state_does_not_confirm_instantly(self):
+        # The pre-wait check, which is a different path from the wake-up: gang
+        # 2 reported on some time ago, so _states[ieee] is already True. A
+        # command to gang 1 must not be confirmed by that leftover.
+        self.join_device()
+        self.uart.feed(report_event(True, endpoint=2))
+        result = run(self.gateway.wait_for_report(IEEE, True, 20, endpoint=1))
+        self.assertFalse(result["confirmed"])
+
+    def test_without_an_endpoint_any_gang_still_confirms(self):
+        # Today's behaviour, and every current caller's behaviour. The fix is
+        # not allowed to cost it.
+        self.join_device()
+        result = self._wait(True, 60,
+                            then=[report_event(True, endpoint=2)])
+        self.assertTrue(result["confirmed"])
+
+    def test_a_report_naming_no_endpoint_still_confirms(self):
+        # Firmware too old to say which gang reported. Refusing here would
+        # break confirmation entirely against that build.
+        self.join_device()
+        stale = report_event(True)
+        del stale["payload"]["endpoint"]
+        result = self._wait(True, 60, endpoint=1, then=[stale])
+        self.assertTrue(result["confirmed"])
 
 
 class MaintenanceOpsTests(GatewayTestCase):
