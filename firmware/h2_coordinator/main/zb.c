@@ -304,6 +304,17 @@ static void expired_txn_cb(const txn_t *txn, void *ctx)
                                  false, "configure_no_response", -1);
         return;
     }
+    if (txn->kind == TXN_KIND_BIND) {
+        /* Same reasoning one step earlier in the chain. A bind is allocated
+         * without a request id (the enable_reporting ack has already gone out
+         * as "accepted"), so it fell through the has_rid guard below and its
+         * expiry produced nothing at all -- while UART_PROTOCOL.md promises
+         * the outcome follows as an event. The hub was left waiting on a
+         * verdict that was never coming. */
+        report_reporting_outcome(txn->short_addr, txn->endpoint, txn->cluster,
+                                 false, "bind_no_response", -1);
+        return;
+    }
     if (!txn->has_rid) return;
 
     char short_s[8];
@@ -550,15 +561,25 @@ static void on_config_report_rsp(ezb_zcl_cmd_config_report_rsp_message_t *rsp)
     txn_handle_t handle = txn_match(&s_txn, TXN_KIND_CONFIG_REPORT, src,
                                     0, false, src_ep, ep_valid);
     txn_t *txn = txn_get(&s_txn, handle);
+    if (txn == NULL) {
+        /* Nothing open that this answers. The verdict used to be emitted
+         * anyway, on a guessed endpoint and a guessed cluster -- inventing a
+         * result for a configure we have no record of asking for, which the
+         * hub then filed against a real device. Both sister handlers already
+         * return here instead. The test is txn == NULL and not has_rid:
+         * CONFIG_REPORT transactions are always allocated without a rid. */
+        TXN_UNLOCK();
+        return;
+    }
     /* Reported from the response, not the transaction: the device is telling
      * us which of its endpoints this verdict is about, and that is a better
-     * source than the request we guessed it answers. */
-    uint8_t endpoint = ep_valid ? src_ep : (txn ? txn->endpoint : 1);
+     * source than the request we matched it to. */
+    uint8_t endpoint = ep_valid ? src_ep : txn->endpoint;
     /* The response itself carries no cluster, so it comes from the request
      * this answers -- and OnOff is the safe default only because it is what a
      * pre-cluster hub asks for. */
-    uint16_t cluster = (txn && txn->cluster) ? txn->cluster : CLUSTER_ON_OFF;
-    if (txn != NULL) txn_release(&s_txn, handle);
+    uint16_t cluster = txn->cluster ? txn->cluster : CLUSTER_ON_OFF;
+    txn_release(&s_txn, handle);
     TXN_UNLOCK();
 
     report_reporting_outcome(src, endpoint, cluster,

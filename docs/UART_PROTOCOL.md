@@ -117,8 +117,15 @@ dropped request.
 | `device_left` | `ieee_addr`, `short_addr`, `rejoin` | `rejoin: true` means it is coming straight back — the hub marks it unreachable rather than forgetting it |
 | `attribute_report` | `short_addr`, `endpoint`, `on_off` | unsolicited; a physical switch press |
 | `reporting_configured` | `short_addr`, `endpoint`, `cluster`, `status` | **check `status`** — its arrival is not success. **Check `cluster` too**: a verdict about any other cluster must not be read as a verdict about OnOff |
-| `reporting_failed` | `short_addr`, `endpoint`, `cluster`, `reason`, optional `detail` | the hub retries with backoff — but only for OnOff. Reasons: `bind_failed`, `configure_send_failed`, `configure_not_delivered`, `configure_no_response`, `configure_refused`, `unsupported_cluster`, `busy` |
+| `reporting_failed` | `short_addr`, `endpoint`, `cluster`, `reason`, optional `detail` | the hub retries with backoff — but only for OnOff. Reasons: `bind_failed`, `bind_no_response`, `configure_send_failed`, `configure_not_delivered`, `configure_no_response`, `configure_refused`, `unsupported_cluster`, `busy` |
 | `permit_join_status` | `duration` | |
+
+The two `_no_response` reasons are the coordinator's own expiry sweep speaking,
+not the device: `bind_no_response` means the bind was sent and never answered,
+`configure_no_response` the same one step later. Neither used to be emitted for
+the bind stage at all, so a bind that vanished left the hub waiting on a verdict
+that was never coming, against the promise two tables up that the outcome
+follows as an event.
 
 `cluster` on the two reporting events is load-bearing. Reporting means one
 specific thing to the hub — "this device will tell us when its own wall switch
