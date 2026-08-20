@@ -19,6 +19,7 @@ only until something imports the other one first, and then it fails by test
 ordering -- so this binds the file directly, under a name of its own.
 """
 
+import asyncio
 import importlib.util
 import unittest
 from pathlib import Path
@@ -163,9 +164,151 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual("zones.list", resolve("GET", "/api/zones")[0].op)
         self.assertEqual("zones.create", resolve("POST", "/api/zones")[0].op)
 
-    def test_trailing_and_duplicate_slashes_are_tolerated(self):
-        self.assertEqual("status.get", resolve("GET", "/api/status/")[0].op)
-        self.assertEqual("status.get", resolve("GET", "//api//status")[0].op)
+    def test_slashes_are_matched_the_way_the_hub_matches_them(self):
+        """Deliberately replaces a test that pinned the opposite.
+
+        The old test asserted that "/api/status/" and "//api//status" resolve
+        here. They do not resolve over HTTP -- Microdot splits the pattern with
+        lstrip('/').split('/') and compares segment counts -- so what that test
+        pinned was one side of exactly the divergence this table exists to
+        prevent. A test can document one half of an inconsistency; it cannot
+        settle which half is right.
+
+        Strict is the side that changes nothing that works. No caller sends
+        these paths: the desktop UI's "/api/zones/" strings are prefixes it
+        concatenates an id onto, and every other client builds its URLs from
+        this table. HTTP has been strict since it shipped, and it is the
+        transport with clients outside this repo. Making the table agree with
+        it moves the seam without moving any behaviour anyone depends on.
+        """
+        self.assertEqual((None, None), resolve("GET", "/api/status/"))
+        self.assertEqual((None, None), resolve("GET", "//api//status"))
+        self.assertEqual("status.get", resolve("GET", "/api/status")[0].op)
+
+
+class TransportParityTests(unittest.TestCase):
+    """The property the table was created for, asserted as behaviour.
+
+    Comparing the two registrations as strings is what the earlier tests did,
+    and it is why the divergence survived: both ends really did read every row
+    of the table, and still answered the same request differently. What the
+    table promises is not "the same patterns" but "the same request behaves
+    identically whether it arrives over WiFi or over USB", so that is what is
+    checked here -- one request, both transports, same status code.
+    """
+
+    CASES = [
+        # (method, path, body, why)
+        ("GET", "/api/status", None, "the plain case"),
+        ("GET", "/api/status/", None, "trailing slash: 404 on both"),
+        ("GET", "//api//status", None, "doubled slashes: 404 on both"),
+        ("GET", "/api/nope", None, "unknown path"),
+        ("GET", "/api/zones", None, "a list"),
+        ("GET", "/api/settings", None, "settings read"),
+        ("PUT", "/api/settings", None, "no body: {} on both, not a 400 here "
+                                       "and a silent no-op there"),
+        ("PUT", "/api/settings", {}, "an explicitly empty body"),
+        ("PUT", "/api/settings", {"in_israel": False}, "a real update"),
+        ("PUT", "/api/settings", {"nope": 1}, "an unknown key is rejected"),
+        ("GET", "/api/schedules/upcoming", None, "a query-string route"),
+        ("DELETE", "/api/zones/z_missing", None, "not found"),
+    ]
+
+    @staticmethod
+    def _build():
+        from smart_kosher.adapters import (
+            H2Simulator,
+            MemoryEventJournal,
+            MemoryRepository,
+        )
+        from smart_kosher.application.api import Api
+        from smart_kosher.application.control_service import ControlService
+        from smart_kosher.application.crud_service import CrudService
+        from smart_kosher.application.device_time import DeviceTimeService
+        from smart_kosher.application.executor import Executor
+        from smart_kosher.application.views import ViewService
+        from smart_kosher.web.server import create_app
+
+        repo = MemoryRepository()
+        executor = Executor(H2Simulator(), MemoryEventJournal())
+
+        class _Settings:
+            def __init__(self):
+                self._values = {"utc_offset_minutes": 120, "in_israel": True}
+                self.load_error = None
+
+            def get(self):
+                return dict(self._values)
+
+            def update(self, patch):
+                self._values.update(patch)
+
+        # One Api behind both transports, so a difference can only come from
+        # the transport translation -- which is the only thing under test.
+        api = Api(CrudService(repo), ControlService(executor, repo),
+                  _Settings(), views=ViewService(repo),
+                  device_time=DeviceTimeService(None))
+        app = create_app(None, None, None, api=api,
+                         collect_after_request=False)
+        return app, api
+
+    @staticmethod
+    def _http_status(app, method, path, body):
+        from microdot.test_client import TestClient
+
+        async def go():
+            client = TestClient(app)
+            kwargs = {} if body is None else {"body": body}
+            res = await client.request(method, path, **kwargs)
+            return res.status_code
+
+        return asyncio.run(go())
+
+    @staticmethod
+    def _usb_status(api, method, path, body):
+        """What apps/desktop/bridge.py:request would answer, same mapping."""
+        from smart_kosher.application.api import ApiError
+
+        translated = rest_to_op(method, path, {}, body)
+        if translated is None:
+            return 404
+        op, params, created = translated
+        try:
+            asyncio.run(api.dispatch(op, params))
+        except ApiError as exc:
+            return HTTP_STATUS.get(exc.kind, 500)
+        return 201 if created else 200
+
+    def test_a_known_method_mismatch_divergence_is_recorded_not_hidden(self):
+        """One difference this test found and this task did not close.
+
+        A path that exists with a different method is 405 over HTTP, because
+        Microdot answers method-not-allowed out of its own routing table, and
+        404 over USB, because resolve() filters on method and simply finds
+        nothing. 405 is the better answer -- the resource is there, the verb is
+        not -- but teaching the USB side to tell the two apart means changing
+        apps/desktop/bridge.py, which task 23 does not put in scope.
+
+        Pinned rather than dropped from the case list above, so it stays
+        visible. If someone closes it, this test fails and says so.
+        """
+        http_app, _ = self._build()
+        _, usb_api = self._build()
+        self.assertEqual(405, self._http_status(http_app, "DELETE",
+                                                "/api/settings", None))
+        self.assertEqual(404, self._usb_status(usb_api, "DELETE",
+                                               "/api/settings", None))
+
+    def test_both_transports_answer_every_request_the_same_way(self):
+        for method, path, body, why in self.CASES:
+            with self.subTest(request="{} {}".format(method, path), why=why):
+                http_app, _ = self._build()
+                _, usb_api = self._build()
+                self.assertEqual(
+                    self._http_status(http_app, method, path, body),
+                    self._usb_status(usb_api, method, path, body),
+                    "{} {} answers differently over HTTP than over USB "
+                    "({})".format(method, path, why))
 
 
 if __name__ == "__main__":

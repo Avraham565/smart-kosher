@@ -15,10 +15,31 @@ from ..route_table import HTTP_STATUS, ROUTES
 
 
 def require_json_body(req):
+    """The parsed body, or an error response.
+
+    An *absent* body is not an error. It becomes {}, which is what the route
+    table's own builders already do with ``body or {}`` -- and that was the
+    whole divergence: the same PUT with no body was a 400 here and a silent
+    no-op over USB. Microdot returns None for a request with no JSON content
+    type rather than raising, so absence used to fall into the "not a dict"
+    branch and be reported as bad JSON, which it also was not.
+
+    A body that is present and unparseable, or present and not an object,
+    stays a 400 -- those are real client errors and both transports agree on
+    them.
+    """
     try:
         body = req.json
     except Exception:
         return None, err("request body must be valid JSON")
+    if body is None:
+        # Microdot answers None both for "there is no body" and for "there is
+        # a body and I will not parse it as JSON" -- a text/plain payload, for
+        # instance. Only the first of those is benign, so they are told apart
+        # here rather than both being waved through.
+        if req.body:
+            return None, err("request body must be valid JSON")
+        return {}, None
     if not isinstance(body, dict):
         return None, err("request body must be a JSON object")
     return body, None

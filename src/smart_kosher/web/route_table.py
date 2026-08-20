@@ -173,8 +173,15 @@ def resolve(method, path):
 
     Returns ``(route, path_vars)``, or ``(None, None)`` when nothing matches --
     which the caller renders as a 404.
+
+    Segments are split the way Microdot splits them, empty ones included, so a
+    path this table accepts is exactly a path the hub's HTTP server accepts.
+    This used to drop empty segments, which made "/api/status/" resolve here
+    and 404 over HTTP -- the transport gap this table exists to prevent,
+    pointing the other way. Nothing sends those paths: the desktop UI uses
+    "/api/zones/" only as a prefix it concatenates an id onto.
     """
-    parts = tuple(part for part in path.split("/") if part)
+    parts = tuple(path.lstrip("/").split("/"))
     for route in ROUTES:
         if route.method != method:
             continue
