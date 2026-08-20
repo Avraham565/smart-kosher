@@ -525,7 +525,17 @@ static void config_report_confirm_cb(ezb_af_user_cnf_t *cnf, void *user_ctx)
 static void on_config_report_rsp(ezb_zcl_cmd_config_report_rsp_message_t *rsp)
 {
     uint16_t src = 0xFFFF;
-    if (rsp->in.header) src = rsp->in.header->src_addr.u.short_addr;
+    uint8_t  src_ep = 0;
+    bool     ep_valid = false;
+    if (rsp->in.header) {
+        src = rsp->in.header->src_addr.u.short_addr;
+        /* Which gang answered. A two-gang switch is one short_addr with two
+         * open requests, and these responses carry no TSN -- so without this
+         * the matcher fell through to "oldest of this kind to this address"
+         * and gang 2's answer closed gang 1's transaction. */
+        src_ep = rsp->in.header->src_ep;
+        ep_valid = true;
+    }
 
     uint8_t refused = EZB_ZCL_STATUS_SUCCESS;
     for (ezb_zcl_config_report_rsp_variable_t *var = rsp->in.variables;
@@ -537,9 +547,13 @@ static void on_config_report_rsp(ezb_zcl_cmd_config_report_rsp_message_t *rsp)
     }
 
     TXN_LOCK();
-    txn_handle_t handle = txn_match(&s_txn, TXN_KIND_CONFIG_REPORT, src, 0, false);
+    txn_handle_t handle = txn_match(&s_txn, TXN_KIND_CONFIG_REPORT, src,
+                                    0, false, src_ep, ep_valid);
     txn_t *txn = txn_get(&s_txn, handle);
-    uint8_t endpoint = txn ? txn->endpoint : 1;
+    /* Reported from the response, not the transaction: the device is telling
+     * us which of its endpoints this verdict is about, and that is a better
+     * source than the request we guessed it answers. */
+    uint8_t endpoint = ep_valid ? src_ep : (txn ? txn->endpoint : 1);
     /* The response itself carries no cluster, so it comes from the request
      * this answers -- and OnOff is the safe default only because it is what a
      * pre-cluster hub asks for. */
@@ -730,12 +744,23 @@ static void cmd_read_report_cfg(const char *rid, cJSON *payload)
 static void on_read_report_cfg_rsp(ezb_zcl_cmd_read_report_config_rsp_message_t *rsp)
 {
     uint16_t src = 0xFFFF;
-    if (rsp->in.header) src = rsp->in.header->src_addr.u.short_addr;
+    uint8_t  src_ep = 0;
+    bool     ep_valid = false;
+    if (rsp->in.header) {
+        src = rsp->in.header->src_addr.u.short_addr;
+        /* Which gang answered. A two-gang switch is one short_addr with two
+         * open requests, and these responses carry no TSN -- so without this
+         * the matcher fell through to "oldest of this kind to this address"
+         * and gang 2's answer closed gang 1's transaction. */
+        src_ep = rsp->in.header->src_ep;
+        ep_valid = true;
+    }
 
     char rid[TXN_RID_MAX];
     bool awaited = false;
     TXN_LOCK();
-    txn_handle_t handle = txn_match(&s_txn, TXN_KIND_READ_REPORT_CFG, src, 0, false);
+    txn_handle_t handle = txn_match(&s_txn, TXN_KIND_READ_REPORT_CFG, src,
+                                    0, false, src_ep, ep_valid);
     txn_t *txn = txn_get(&s_txn, handle);
     if (txn != NULL) {
         awaited = txn->has_rid;
@@ -963,10 +988,14 @@ static void on_read_attr_rsp(ezb_zcl_cmd_read_attr_rsp_message_t *rsp)
     uint16_t src = 0xFFFF;
     uint8_t  tsn = 0;
     bool tsn_valid = false;
+    uint8_t  src_ep = 0;
+    bool     ep_valid = false;
     if (rsp->in.header) {
         src = rsp->in.header->src_addr.u.short_addr;
         tsn = rsp->in.header->tsn;
         tsn_valid = true;
+        src_ep = rsp->in.header->src_ep;
+        ep_valid = true;
     }
 
     for (ezb_zcl_read_attr_rsp_variable_t *var = rsp->in.variables;
@@ -982,7 +1011,7 @@ static void on_read_attr_rsp(ezb_zcl_cmd_read_attr_rsp_message_t *rsp)
 
         TXN_LOCK();
         txn_handle_t handle = txn_match(&s_txn, TXN_KIND_READ_ATTR, src,
-                                        tsn, tsn_valid);
+                                        tsn, tsn_valid, src_ep, ep_valid);
         txn_t *txn = txn_get(&s_txn, handle);
         if (txn != NULL) {
             awaited = txn->has_rid;

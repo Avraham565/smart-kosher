@@ -291,9 +291,9 @@ static void test_match_prefers_tsn_over_guessing(void)
     txn_get(&table, second)->tsn = 9;
     txn_get(&table, second)->has_tsn = true;
 
-    CHECK(txn_match(&table, TXN_KIND_READ_ATTR, 0x1111, 9, true) == second,
+    CHECK(txn_match(&table, TXN_KIND_READ_ATTR, 0x1111, 9, true, 0, false) == second,
           "tsn 9 must resolve to the second request, not the newest slot");
-    CHECK(txn_match(&table, TXN_KIND_READ_ATTR, 0x1111, 7, true) == first,
+    CHECK(txn_match(&table, TXN_KIND_READ_ATTR, 0x1111, 7, true, 0, false) == first,
           "tsn 7 resolves to the first");
 }
 
@@ -302,10 +302,97 @@ static void test_match_ignores_other_devices(void)
     txn_table_t table;
     txn_table_init(&table);
     txn_alloc(&table, TXN_KIND_ON_OFF, "mine", 0x1111, 1, 0, 5000);
-    CHECK(txn_match(&table, TXN_KIND_ON_OFF, 0x2222, 0, false) == TXN_NONE,
+    CHECK(txn_match(&table, TXN_KIND_ON_OFF, 0x2222, 0, false, 0, false) == TXN_NONE,
           "a response from another device must not resolve to our request");
-    CHECK(txn_match(&table, TXN_KIND_READ_ATTR, 0x1111, 0, false) == TXN_NONE,
+    CHECK(txn_match(&table, TXN_KIND_READ_ATTR, 0x1111, 0, false, 0, false) == TXN_NONE,
           "a different kind must not resolve either");
+}
+
+/* A two-gang switch is one short_addr with two endpoints, and its two
+ * configure_reporting responses carry no TSN. Before the endpoint reached the
+ * matcher, both fell through to "oldest open request of this kind to this
+ * address" -- so gang 2's answer closed gang 1's transaction, and gang 1's
+ * verdict was reported against the wrong gang. */
+static void test_match_separates_two_endpoints_on_one_device(void)
+{
+    txn_table_t table;
+    txn_table_init(&table);
+
+    txn_handle_t ep1 = txn_alloc(&table, TXN_KIND_CONFIG_REPORT, "one",
+                                 0x1111, 1, 0, 5000);
+    txn_handle_t ep2 = txn_alloc(&table, TXN_KIND_CONFIG_REPORT, "two",
+                                 0x1111, 2, 100, 5000);
+
+    CHECK(txn_match(&table, TXN_KIND_CONFIG_REPORT, 0x1111, 0, false, 2, true)
+          == ep2, "endpoint 2's answer must resolve to endpoint 2's request");
+    CHECK(txn_match(&table, TXN_KIND_CONFIG_REPORT, 0x1111, 0, false, 1, true)
+          == ep1, "endpoint 1's answer must resolve to endpoint 1's request");
+}
+
+static void test_match_separates_endpoints_for_read_report_cfg(void)
+{
+    txn_table_t table;
+    txn_table_init(&table);
+
+    txn_handle_t ep1 = txn_alloc(&table, TXN_KIND_READ_REPORT_CFG, "one",
+                                 0x2222, 1, 0, 5000);
+    txn_handle_t ep2 = txn_alloc(&table, TXN_KIND_READ_REPORT_CFG, "two",
+                                 0x2222, 2, 100, 5000);
+
+    CHECK(txn_match(&table, TXN_KIND_READ_REPORT_CFG, 0x2222, 0, false, 2, true)
+          == ep2, "read_report_cfg must separate the gangs too");
+    CHECK(txn_match(&table, TXN_KIND_READ_REPORT_CFG, 0x2222, 0, false, 1, true)
+          == ep1, "and the other way round");
+}
+
+/* The dangerous direction. Narrowing by endpoint is only allowed to pick
+ * among the fall-back candidates: a device that answers from an endpoint we
+ * did not expect must still be matched, or it gets an expiry instead of a
+ * reply -- which is worse than the mismatch this change is fixing. */
+static void test_endpoint_never_outranks_tsn(void)
+{
+    txn_table_t table;
+    txn_table_init(&table);
+
+    txn_handle_t ep1 = txn_alloc(&table, TXN_KIND_READ_ATTR, "one",
+                                 0x3333, 1, 0, 5000);
+    txn_handle_t ep2 = txn_alloc(&table, TXN_KIND_READ_ATTR, "two",
+                                 0x3333, 2, 100, 5000);
+    txn_get(&table, ep1)->tsn = 7;
+    txn_get(&table, ep1)->has_tsn = true;
+    txn_get(&table, ep2)->tsn = 9;
+    txn_get(&table, ep2)->has_tsn = true;
+
+    /* TSN says slot one, endpoint says slot two. TSN is the responder's own
+     * correlation and wins outright. */
+    CHECK(txn_match(&table, TXN_KIND_READ_ATTR, 0x3333, 7, true, 2, true)
+          == ep1, "a known TSN must not be overridden by the endpoint");
+}
+
+static void test_an_unexpected_endpoint_still_matches(void)
+{
+    txn_table_t table;
+    txn_table_init(&table);
+
+    txn_handle_t only = txn_alloc(&table, TXN_KIND_CONFIG_REPORT, "one",
+                                  0x4444, 1, 0, 5000);
+
+    CHECK(txn_match(&table, TXN_KIND_CONFIG_REPORT, 0x4444, 0, false, 3, true)
+          == only,
+          "an answer from an unexpected endpoint must fall back, not expire");
+}
+
+static void test_match_without_an_endpoint_behaves_as_before(void)
+{
+    txn_table_t table;
+    txn_table_init(&table);
+
+    txn_handle_t first = txn_alloc(&table, TXN_KIND_CONFIG_REPORT, "one",
+                                   0x5555, 1, 0, 5000);
+    txn_alloc(&table, TXN_KIND_CONFIG_REPORT, "two", 0x5555, 2, 100, 5000);
+
+    CHECK(txn_match(&table, TXN_KIND_CONFIG_REPORT, 0x5555, 0, false, 0, false)
+          == first, "with no endpoint known, the oldest still wins");
 }
 
 /* ── runner ─────────────────────────────────────────────────────── */
@@ -327,6 +414,11 @@ int main(void)
     test_unanswered_request_expires();
     test_match_prefers_tsn_over_guessing();
     test_match_ignores_other_devices();
+    test_match_separates_two_endpoints_on_one_device();
+    test_match_separates_endpoints_for_read_report_cfg();
+    test_endpoint_never_outranks_tsn();
+    test_an_unexpected_endpoint_still_matches();
+    test_match_without_an_endpoint_behaves_as_before();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

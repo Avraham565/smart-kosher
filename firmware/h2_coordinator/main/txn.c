@@ -82,10 +82,13 @@ void txn_release(txn_table_t *table, txn_handle_t handle)
 }
 
 txn_handle_t txn_match(txn_table_t *table, txn_kind_t kind,
-                       uint16_t short_addr, uint8_t tsn, bool tsn_valid)
+                       uint16_t short_addr, uint8_t tsn, bool tsn_valid,
+                       uint8_t endpoint, bool endpoint_valid)
 {
     txn_handle_t oldest = TXN_NONE;
     int64_t oldest_deadline = 0;
+    txn_handle_t oldest_ep = TXN_NONE;
+    int64_t oldest_ep_deadline = 0;
 
     for (uint32_t i = 0; i < TXN_MAX; i++) {
         txn_t *slot = &table->slots[i];
@@ -100,8 +103,18 @@ txn_handle_t txn_match(txn_table_t *table, txn_kind_t kind,
             oldest = make_handle(i, slot->generation);
             oldest_deadline = slot->deadline_ms;
         }
+        /* Same fall-back, restricted to the endpoint that answered. A
+         * two-gang switch is one short_addr with two open requests, and
+         * without this the second gang's answer closed the first gang's
+         * transaction. */
+        if (endpoint_valid && slot->endpoint == endpoint &&
+            (oldest_ep == TXN_NONE || slot->deadline_ms < oldest_ep_deadline)) {
+            oldest_ep = make_handle(i, slot->generation);
+            oldest_ep_deadline = slot->deadline_ms;
+        }
     }
-    return oldest;
+    /* Never TXN_NONE just because the endpoint matched nothing. */
+    return oldest_ep != TXN_NONE ? oldest_ep : oldest;
 }
 
 uint32_t txn_expire(txn_table_t *table, int64_t now_ms,

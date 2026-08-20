@@ -98,9 +98,17 @@ void txn_release(txn_table_t *table, txn_handle_t handle);
 /* Find the open transaction a device response belongs to. Matching is by the
  * responder's own identity, never by "the last thing we sent": TSN first when
  * the stack gave us one, otherwise the oldest open request of that kind to
- * that address. */
+ * that address, preferring one to the same endpoint.
+ *
+ * The endpoint only narrows the fall-back and never outranks TSN. Making the
+ * match strict is the dangerous direction: a device answering from an
+ * endpoint we did not expect would lose its match and get an expiry instead
+ * of a reply, which is worse than the mismatch this exists to prevent. So an
+ * endpoint that selects nothing falls back to the old behaviour rather than
+ * to TXN_NONE. */
 txn_handle_t txn_match(txn_table_t *table, txn_kind_t kind,
-                       uint16_t short_addr, uint8_t tsn, bool tsn_valid);
+                       uint16_t short_addr, uint8_t tsn, bool tsn_valid,
+                       uint8_t endpoint, bool endpoint_valid);
 
 /*
  * Release every slot past its deadline, reporting each to ``on_expired``
