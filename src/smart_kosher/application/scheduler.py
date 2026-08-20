@@ -37,6 +37,7 @@ import asyncio
 
 from ..ports.clock import MIN_VALID_YEAR
 from ..zmanim import gregorian_from_day_number
+from .executor import ACK_UNJOURNALED, ALREADY_EXECUTED, EXECUTED
 from .planner import Planner
 from .recovery import RecoveryService
 from .views import now_utc, planner_config, settings_key
@@ -151,9 +152,21 @@ class Scheduler:
             self._recovery_key = key
         return self._recovery
 
-    # An event the Executor journalled is finished; anything else has not
-    # actually reached its device and must stay in view of the next tick.
-    _JOURNALLED = ("executed", "already_executed")
+    # The outcomes that will not be sent again. This is deliberately *not*
+    # "what the Executor journalled": ack_unjournaled is precisely the outcome
+    # that never reached the journal, and yet the device did act on it -- the
+    # ack came back and only the journal write failed. Re-sending it every
+    # tick fought the user, who could switch a light off by hand and watch it
+    # come back within TICK_SECONDS, in breach of the rule that the brain
+    # respects manual intervention.
+    #
+    # Only `failed` still rewinds the window: there the device really did not
+    # act, and the retry is the whole point.
+    #
+    # Which outcomes exist is the Executor's to say, so the names are imported
+    # rather than restated; which of them count as settled is this module's
+    # policy, and lives here.
+    _SETTLED = (EXECUTED, ALREADY_EXECUTED, ACK_UNJOURNALED)
 
     def _advance_to(self, now, result):
         """Where the next window should start, given how this one went.
@@ -172,7 +185,7 @@ class Scheduler:
         pending = [
             event["utc_minute"]
             for event, outcome in zip(result["events"], result["outcomes"])
-            if outcome.get("status") not in self._JOURNALLED
+            if outcome.get("status") not in self._SETTLED
         ]
         if not pending:
             return now
@@ -198,9 +211,9 @@ class Scheduler:
 
         recovery = self._recovery_for(self.settings.get())
         result = await recovery.recover(window[0], window[1])
-        # Advance only past what actually got through. If the planner threw we
+        # Advance only past what actually settled. If the planner threw we
         # never reach here and the next tick retries the same span; if an event
-        # ran but was not journaled, we rewind to just before it so the next
+        # did not reach its device, we rewind to just before it so the next
         # tick sweeps it up again.
         self._last = self._advance_to(now, result)
 

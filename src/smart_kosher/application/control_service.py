@@ -8,6 +8,7 @@ from ..domain.actions import ACTION_TYPES
 from ..domain.entities import TARGET_COLLECTIONS
 from ..zmanim import gregorian_day_number
 from .crud_service import NotFoundError
+from .executor import EXECUTED
 
 # Both vocabularies come from the domain. This module used to restate them --
 # its own ("on","off","toggle") tuple and its own target->collection map -- so
@@ -43,7 +44,7 @@ class ControlService:
 
         if (confirm_ms and target_type == "endpoint"
                 and action_type in ("on", "off")
-                and outcome.get("status") == "executed"):
+                and outcome.get("status") == EXECUTED):
             gateway = getattr(self._executor, "gateway", None)
             waiter = getattr(gateway, "wait_for_report", None)
             ieee = entity.get("ieee_address")
