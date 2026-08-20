@@ -1,5 +1,6 @@
 /*
- * Emits the reference zmanim table that tests/test_zmanim.py checks against.
+ * Emits the reference zmanim table that tests/test_zmanim_reference.py
+ * checks against.
  *
  * This is the only place KosherJava is ever executed. It runs by hand, its
  * output is committed, and nothing in the product or the test suite needs Java.

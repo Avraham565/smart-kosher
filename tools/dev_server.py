@@ -4,8 +4,12 @@ Usage:
     $env:PYTHONPATH = "src"
     python tools/dev_server.py
 
-All data lives in memory only (resets on restart).
-Switch STORAGE = "json" to persist to tools/dev_data/ between runs.
+Data persists to tools/dev_data/ between runs -- STORAGE is "json" below.
+Switch it to "memory" for a server that resets on every restart.
+
+Binds 127.0.0.1, like apps/desktop/server.py: this serves an unauthenticated
+API over whatever network the machine is on, and a development default should
+not be reachable from the rest of it.
 """
 
 import os
@@ -84,7 +88,10 @@ def main():
     print("       http://localhost:5004/api/settings")
     print()
 
-    app.run(host="0.0.0.0", port=5004, debug=True)
+    # 127.0.0.1, not 0.0.0.0. Every line above advertises localhost, and
+    # this API has no authentication of any kind -- binding all
+    # interfaces put it on the LAN for anyone who could reach the port.
+    app.run(host="127.0.0.1", port=5004, debug=True)
 
 
 if __name__ == "__main__":
