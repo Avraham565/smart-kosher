@@ -8,11 +8,23 @@ from ..domain.actions import ACTION_TYPES
 from ..domain.entities import TARGET_COLLECTIONS
 from ..zmanim import gregorian_day_number
 from .crud_service import NotFoundError
-from .executor import EXECUTED
+from .executor import ACK_UNJOURNALED, EXECUTED
 
 # Both vocabularies come from the domain. This module used to restate them --
 # its own ("on","off","toggle") tuple and its own target->collection map -- so
 # a fourth action would have been accepted by the domain and rejected here.
+
+# Outcomes that mean the device acted, and so are worth asking it to confirm.
+# ack_unjournaled belongs here for the same reason it stopped being re-sent by
+# the scheduler -- the ack came back and the relay moved -- but the question is
+# not the same one. The scheduler asked "send it again?"; this asks "read the
+# state back?", and a command whose journal write failed is the one where an
+# observed-state read matters most, because the journal has no record of it and
+# the device's own word is the only evidence left.
+#
+# This is policy, so it lives with the caller that holds it; the names come
+# from the Executor, which is what produces them.
+_DEVICE_ACTED = (EXECUTED, ACK_UNJOURNALED)
 
 
 class ControlService:
@@ -44,7 +56,7 @@ class ControlService:
 
         if (confirm_ms and target_type == "endpoint"
                 and action_type in ("on", "off")
-                and outcome.get("status") == EXECUTED):
+                and outcome.get("status") in _DEVICE_ACTED):
             gateway = getattr(self._executor, "gateway", None)
             waiter = getattr(gateway, "wait_for_report", None)
             ieee = entity.get("ieee_address")

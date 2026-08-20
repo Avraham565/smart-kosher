@@ -39,6 +39,7 @@ from smart_kosher.application.executor import (
     ALREADY_EXECUTED,
     EXECUTED,
     FAILED,
+    Executor,
 )
 from smart_kosher.ports.device_gateway import GATEWAY_ALL_STATUSES
 
@@ -71,6 +72,32 @@ VOCABULARY = {
 
 def _read(path):
     return io.open(str(path), encoding="utf-8").read()
+
+
+class _ActingGateway:
+    """A gateway whose commands land and which can answer an observed read."""
+
+    def __init__(self, status="sent_to_zigbee"):
+        self.status = status
+        self.confirmations = 0
+
+    async def send(self, event):
+        return {"status": self.status, "command_id": event["event_id"]}
+
+    async def wait_for_report(self, ieee, expect, timeout_ms, endpoint=None):
+        self.confirmations += 1
+        return {"confirmed": True, "observed": expect}
+
+
+class _RefusingJournal:
+    """Records nothing, which is what turns an executed command into
+    ack_unjournaled."""
+
+    def was_executed(self, event_id):
+        return False
+
+    def record(self, event, outcome):
+        raise OSError("flash full")
 
 
 class FakeClock:
@@ -223,6 +250,42 @@ class SettledPolicyTests(unittest.TestCase):
         outcomes = self._run(sched.tick())
         self.assertEqual([EXECUTED], [o["status"] for o in outcomes],
                          "a failed event must stay in view of the next tick")
+
+    def test_an_ack_that_missed_the_journal_is_still_worth_confirming(self):
+        """The same outcome as the scheduler's, asked a different question.
+
+        The scheduler asked "send it again?" and the answer was no, because the
+        device already acted. This asks "read the device's state?", and a
+        device that acted is precisely the one worth reading -- more so here
+        than anywhere, because the journal has no record of it, so the observed
+        state is the only evidence left that the command landed.
+        """
+        gateway = _ActingGateway()
+        service = ControlService(
+            Executor(gateway, _RefusingJournal()), self.composed.repository)
+
+        outcome = self._run(service.send(
+            "endpoint", self.endpoint["id"], "on", confirm_ms=50))
+
+        self.assertEqual(ACK_UNJOURNALED, outcome["status"])
+        self.assertIn("confirmation", outcome,
+                      "the device acted and nothing asked it to confirm")
+        self.assertTrue(outcome["confirmation"]["confirmed"])
+        self.assertEqual(1, gateway.confirmations)
+
+    def test_a_failed_command_is_not_worth_confirming(self):
+        # The gate still shuts on the outcome that means the device did not
+        # act. Opening it for ack_unjournaled must not open it for everything.
+        gateway = _ActingGateway(status="timeout")
+        service = ControlService(
+            Executor(gateway, _RefusingJournal()), self.composed.repository)
+
+        outcome = self._run(service.send(
+            "endpoint", self.endpoint["id"], "on", confirm_ms=50))
+
+        self.assertEqual(FAILED, outcome["status"])
+        self.assertNotIn("confirmation", outcome)
+        self.assertEqual(0, gateway.confirmations)
 
     def test_manual_control_gates_its_confirmation_on_the_constant(self):
         # control_service gates its confirmation read on EXECUTED. Pin that a
