@@ -1,0 +1,13 @@
+# Shell scripts check out with LF whatever core.autocrlf says locally.
+#
+# The blob was always LF -- the repository was never wrong. core.autocrlf=true,
+# which is the Git-for-Windows default, rewrote it to CRLF on checkout, and
+# bash then read the option name as `pipefail\r`:
+#
+#     run.sh: line 5: set: pipefail: invalid option name
+#
+# So `bash firmware/h2_coordinator/host_test/run.sh` -- the way CLAUDE.md says
+# to run the coordinator's C tests -- had never once succeeded on a Windows
+# checkout, on any machine with the default config. The 1,234 it advertised
+# came from invoking gcc by hand.
+*.sh text eol=lf
