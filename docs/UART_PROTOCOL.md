@@ -89,9 +89,16 @@ broken configuration. (The measured answer: both relays return
 `min_interval: 0, max_interval: 3600`, so the 3 s is that unit's own internal
 behaviour, not a clamp.)
 
-Error codes: `missing_payload`, `missing_state`, `bad_addr`, `bad_ieee`,
-`unknown_device`, `unknown_op`, `bad_json`, `bad_crc`, `bad_frame`,
+Error codes: `missing_payload`, `missing_state`, `missing_ieee`, `bad_addr`,
+`bad_ieee`, `unknown_device`, `unknown_op`, `bad_json`, `bad_crc`, `bad_frame`,
 `frame_too_long`, `no_network`, `send_failed`, `bind_failed`, `busy`.
+
+The `missing_` codes mean the field was not there at all; the `bad_` codes mean
+it was there and would not parse. Different faults with different fixes -- a
+caller that never sent the field versus one that sent it wrong -- so
+`missing_ieee` and `bad_ieee` stay separate, exactly as the firmware emits them
+two lines apart. `tests/test_protocol_vocab_is_in_sync.py` holds this list and
+the firmware to full equality, in both directions.
 
 `busy` means the in-flight request table is full — honest backpressure, not a
 dropped request.
