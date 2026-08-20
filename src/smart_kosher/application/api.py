@@ -375,7 +375,12 @@ class Api:
             if message:
                 raise ApiError(BAD_REQUEST, message)
         self._settings.update(_with_city_geography(data))
-        return self._settings.get()
+        # The same projection the read path applies, not the raw store. A
+        # device provisioned before a rule changed still carries the retired
+        # keys, so echoing storage here showed a candle_offset of 40 straight
+        # after a city edit while the system went on lighting at 18 -- the one
+        # number the user had just been looking at, and the wrong one.
+        return self._settings_get(params)
 
     def _cities(self, params):
         cities = []

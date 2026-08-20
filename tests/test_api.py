@@ -230,5 +230,80 @@ class ViewClockInjectionTests(unittest.TestCase):
         self.assertEqual((2026, 7, 8), views.local_today(settings))
 
 
+class DstDisplayTests(unittest.TestCase):
+    """Upcoming events must be shown with the offset they were planned with.
+
+    The planner converts local -> UTC using the offset at the event's own
+    local time. Reading it back with the date's noon offset agrees on 363 days
+    of the year and disagrees on the two that carry a transition, which are
+    exactly the days a Shabbat schedule is being double-checked.
+
+    Israel 2026: clocks go forward on 2026-03-27 and back on 2026-10-25, both
+    at 02:00 local.
+    """
+
+    ISRAEL = {"in_israel": True, "lat": 31.7683, "lon": 35.2137,
+              "elevation": 754, "utc_offset_minutes": 120}
+
+    def _upcoming(self, now_utc, hour, minute):
+        repo = MemoryRepository()
+        repo.upsert("endpoints", {"id": "ep1", "name": "boiler",
+                                  "ieee_address": "a4:c1:38:6b:47:9d:c2:55"})
+        repo.upsert("schedules", {
+            "id": "s1", "name": "בדיקה", "enabled": True,
+            "target_type": "endpoint", "target_id": "ep1",
+            "action_type": "on", "action_data": {},
+            "trigger_type": "fixed_time",
+            "trigger_data": {"h": hour, "m": minute},
+            "recurrence_type": "daily", "recurrence_data": {},
+        })
+        views = ViewService(repo, clock=FakeClock(now_utc))
+        events, errors = views.upcoming_events(self.ISRAEL, 1)
+        self.assertEqual([], errors)
+        self.assertTrue(events, "the schedule produced no event to display")
+        return events[0]
+
+    def test_spring_forward_does_not_print_an_hour_that_never_happened(self):
+        # 01:30 on the spring day is still +2; noon that day is +3. Displaying
+        # with noon's offset prints 02:30 -- inside the hour the clock skips.
+        event = self._upcoming((2026, 3, 26, 12, 0), 1, 30)
+        self.assertEqual("2026-03-27", event["local_date"])
+        self.assertEqual("01:30", event["local_time"])
+
+    def test_autumn_back_keeps_the_event_on_its_own_date(self):
+        # 00:30 on the autumn day is still +3; noon that day is +2. Displaying
+        # with noon's offset moves it to 23:30 the evening before.
+        event = self._upcoming((2026, 10, 24, 12, 0), 0, 30)
+        self.assertEqual("2026-10-25", event["local_date"])
+        self.assertEqual("00:30", event["local_time"])
+
+    def test_an_ordinary_day_is_unchanged(self):
+        event = self._upcoming((2026, 7, 7, 12, 0), 8, 0)
+        self.assertEqual("2026-07-08", event["local_date"])
+        self.assertEqual("08:00", event["local_time"])
+
+
+class SettingsProjectionTests(unittest.TestCase):
+    def test_update_answers_with_the_same_projection_as_get(self):
+        # The update path used to echo the raw store. A device provisioned
+        # before a rule changed still carries the retired keys, so the reply
+        # showed a number the system no longer uses -- right after the user
+        # edited that very screen.
+        api = Api(
+            CrudService(MemoryRepository()),
+            None,
+            FakeSettings({"utc_offset_minutes": 120, "in_israel": True,
+                          "candle_offset": 40, "tzais_offset": 40}),
+            views=ViewService(MemoryRepository()),
+            device_time=DeviceTimeService(None),
+        )
+
+        updated = dispatch(api, "settings.update", {"data": {"in_israel": False}})
+        read = dispatch(api, "settings.get")
+
+        self.assertEqual(read, updated)
+        self.assertNotIn("tzais_offset", updated)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -77,6 +77,30 @@ def offset_for_date(settings, year, month, day):
     return offset_resolver(settings)(year, month, day, 12, 0)
 
 
+def offset_for_utc_minute(settings, utc_minute):
+    """UTC offset in force at an absolute UTC minute.
+
+    The planner goes local -> UTC with the offset at the event's *own* local
+    time (planner.py). Coming back with the date's noon offset agrees on every
+    day that has no transition and disagrees on the two that do: an hour out
+    in autumn, and in spring a local time that never existed -- 01:30 on the
+    spring day is offset +2, noon that day is +3, and the difference prints
+    02:30 inside the hour the clock skips.
+
+    One refinement pass settles it: guess with the noon offset, then look up
+    the offset at the local time that guess implies. A further pass could not
+    move it, because an Israeli transition shifts the clock once, by one hour.
+    """
+    resolve = offset_resolver(settings)
+    day, _ = divmod(utc_minute, 1440)
+    date = add_gregorian_days(1, 1, 1, day - 1)
+    local = utc_minute + resolve(date[0], date[1], date[2], 12, 0)
+    day, minute_of_day = divmod(local, 1440)
+    date = add_gregorian_days(1, 1, 1, day - 1)
+    return resolve(date[0], date[1], date[2],
+                   minute_of_day // 60, minute_of_day % 60)
+
+
 def planner_config(settings):
     # The two Shabbat offsets come from the constants, never from settings: a
     # stale stored value must not be able to move Shabbat.
@@ -220,7 +244,7 @@ class ViewService:
         start_minute = planner.utc_minute(start)
         view = []
         for event in events:
-            offset = offset_for_date(settings, *event["source_date"])
+            offset = offset_for_utc_minute(settings, event["utc_minute"])
             local_minute = event["utc_minute"] + offset
             local_day = local_minute // 1440
             local_date = add_gregorian_days(1, 1, 1, local_day - 1)
