@@ -1137,6 +1137,80 @@ class EndpointConfirmationTests(GatewayTestCase):
         self.assertTrue(result["confirmed"])
 
 
+class SendNeverRaisesTests(GatewayTestCase):
+    """A UART write that throws must not escape send(), or leak a slot.
+
+    send() promises in its own docstring never to raise on a delivery problem,
+    because Executor is the thing that decides whether to retry. The group path
+    already kept that promise -- its worker catches per member, with a comment
+    saying why. The single-target path, which is nearly every command, did not.
+
+    The leak underneath is the part no caller can see. _command reserves
+    _pending[rid] *before* the write, and nothing takes it back out when the
+    write throws: that entry is never popped by the ack path (no ack is
+    coming) nor by the timeout path (no wait was ever started). It is a slot
+    per failed write, forever, on a board that counts its RAM.
+    """
+
+    def _explode(self, *_args):
+        raise OSError("uart gone")
+
+    def test_a_write_that_throws_does_not_escape_send(self):
+        self.join_device()
+        self.uart.write = self._explode
+
+        result = run(self.gateway.send(make_event("on")))
+
+        self.assertEqual("error", result["status"])
+        self.assertIn("uart gone", result["error"])
+
+    def test_a_write_that_throws_leaves_no_pending_slot(self):
+        self.join_device()
+        self.uart.write = self._explode
+
+        for i in range(5):
+            run(self.gateway.send(
+                make_event("on", event_id="ev{}".format(i))))
+
+        self.assertEqual({}, self.gateway._pending,
+                         "each failed write left a slot nothing will pop")
+
+    def test_a_failing_write_still_reports_per_member_in_a_group(self):
+        self.repo.upsert("endpoints", {
+            "id": "ep2", "name": "urn",
+            "ieee_address": "aa:bb:cc:dd:ee:ff:00:11"})
+        self.repo.upsert("groups", {
+            "id": "g1", "name": "kitchen", "member_ids": ["ep1", "ep2"]})
+        self.join_device()
+        self.join_device(ieee="aa:bb:cc:dd:ee:ff:00:11", short="0x1111")
+        self.uart.write = self._explode
+
+        result = run(self.gateway.send(
+            make_event("on", target_type="group", target_id="g1")))
+
+        self.assertEqual("error", result["status"])
+        self.assertEqual({}, self.gateway._pending)
+
+    def test_send_survives_an_unexpected_failure_below_it(self):
+        # Fixing _command closed the one path into _deliver_one we know about,
+        # which would leave the single-target guard covering nothing testable
+        # -- a guard that cannot fail is a guard nobody can trust. Its actual
+        # contract is broader than the write: whatever _deliver_one does,
+        # send() answers with a status. So make _deliver_one do the worst
+        # thing it can.
+        self.join_device()
+
+        async def boom(*_args):
+            raise RuntimeError("something below broke")
+
+        self.gateway._deliver_one = boom
+
+        result = run(self.gateway.send(make_event("on")))
+
+        self.assertEqual("error", result["status"])
+        self.assertIn("something below broke", result["error"])
+
+
 class MaintenanceOpsTests(GatewayTestCase):
     def test_ping_updates_liveness_info(self):
         self.uart.autoresponder = lambda m: [{

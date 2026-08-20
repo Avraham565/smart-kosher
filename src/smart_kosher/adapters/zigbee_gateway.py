@@ -637,7 +637,17 @@ class ZigbeeGateway(DeviceGateway):
             rid = self._next_rid(op)
         evt = asyncio.Event()
         self._pending[rid] = [evt, None]
-        self._write_cmd(op, payload, rid)
+        try:
+            self._write_cmd(op, payload, rid)
+        except Exception as exc:
+            # The slot is reserved before the write so that an ack arriving
+            # inside it has somewhere to land. That ordering is right, but it
+            # means a write that throws leaves an entry no other path will
+            # ever pop: the ack path needs an ack that is not coming, and the
+            # timeout path needs a wait that never started. One slot per
+            # failed write, for the life of the process.
+            self._pending.pop(rid, None)
+            return {"status": "error", "error": str(exc), "command_id": rid}
         try:
             await asyncio.wait_for(
                 evt.wait(),
@@ -804,7 +814,14 @@ class ZigbeeGateway(DeviceGateway):
         """
         results = [None] * len(targets)
         if len(targets) == 1:
-            results[0] = await self._deliver_one(targets[0], action, event_id)
+            try:
+                results[0] = await self._deliver_one(
+                    targets[0], action, event_id)
+            except Exception as exc:
+                # Same promise the worker below keeps, on the path that nearly
+                # every command actually takes.
+                results[0] = {"status": "error", "error": str(exc),
+                              "command_id": event_id}
             return results
 
         # No await between the read and the write, so on a single-threaded
