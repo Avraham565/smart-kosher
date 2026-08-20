@@ -168,7 +168,7 @@ fixtures על הראשון ושני המוצרים רצים על השני. **ה�
 ## פקודות
 
 ```
-$env:PYTHONPATH = "src"; python -m pytest -q     # 423 עוברים, 1 מדולג, 1490 subtests
+$env:PYTHONPATH = "src"; python -m pytest -q     # חייבת לעבור במלואה
 bash firmware/h2_coordinator/host_test/run.sh    # ב-WSL: 1234 בדיקות C
 ruff check .                                      # חייב לעבור נקי
 python tools/dev_server.py                        # API על localhost:5004
