@@ -341,6 +341,26 @@ class ToggleTests(GatewayTestCase):
         cmd = [m for m in self.uart.written if m["op"] == "on_off"][-1]
         self.assertEqual("off", cmd["payload"]["state"])
 
+    def test_a_read_with_no_on_off_does_not_become_a_blind_on(self):
+        # The read round-tripped and told us nothing. bool(None) is False, so
+        # this used to read as "the lamp is off" and toggle switched it on --
+        # every time, whatever the lamp was actually doing. A read that
+        # carries no attribute is a failed read.
+        self.join_device()
+
+        def responder(m):
+            if m["op"] == "read_attr":
+                return [ack_for(m, {"short_addr": SHORT})]   # no on_off
+            return [ack_for(m)]
+        self.uart.autoresponder = responder
+
+        result = run(self.gateway.send(make_event("toggle")))
+
+        self.assertEqual("error", result["status"])
+        self.assertIn("on_off", result["error"])
+        self.assertNotIn("on_off", self.written_ops(),
+                         "a command went out on a state we never learned")
+
     def test_toggle_cold_cache_falls_back_to_read_then_flips(self):
         self.join_device()
 
@@ -506,6 +526,15 @@ class RegistryTests(GatewayTestCase):
         device = self.gateway.devices()[IEEE]
         self.assertFalse(device["reporting"])
         self.assertEqual("error", device["reporting_error"])
+
+    def test_a_configure_with_no_verdict_at_all_is_not_success(self):
+        # One level down from the same mistake: the outcome is read from
+        # payload.status, and a *missing* status used to default to "ok".
+        # Absence of bad news is not good news, and the device it silently
+        # blessed is deaf to its own wall switch.
+        self.join_device()
+        self._reporting_result("reporting_configured")
+        self.assertFalse(self.gateway.devices()[IEEE]["reporting"])
 
     def test_a_metering_failure_does_not_disown_a_healthy_switch(self):
         # This was happening live: the metering configure fails on every

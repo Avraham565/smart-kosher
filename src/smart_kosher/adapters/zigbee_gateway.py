@@ -308,8 +308,11 @@ class ZigbeeGateway(DeviceGateway):
                 # The coordinator reports the *outcome* in payload.status --
                 # taking the event's arrival as success marked a failed
                 # configure as working, and the device then never reported.
+                # ...and a *missing* status is not "ok" either. Defaulting it
+                # to success was the same mistake one level down: absence of
+                # bad news read as good news.
                 self._on_reporting_result(
-                    payload, payload.get("status", "ok") == "ok")
+                    payload, payload.get("status") == "ok")
             elif op == "reporting_failed":
                 self._on_reporting_result(payload, False)
             elif op == "device_endpoints":
@@ -902,7 +905,16 @@ class ZigbeeGateway(DeviceGateway):
             # bug this pattern already caused once.)
             if read["status"] not in EXECUTION_SUCCESS_STATUSES:
                 return read
-            current = bool(read.get("reply", {}).get("on_off"))
+            reply = read.get("reply") or {}
+            if "on_off" not in reply:
+                # Treated exactly like the failed read above, because that is
+                # what it is: the round trip worked and told us nothing. It
+                # used to fall to bool(None) -> False -> "the lamp is off" ->
+                # toggle turns it on, every time, whatever it was doing.
+                return {"status": "error",
+                        "error": "read_attr reply carried no on_off",
+                        "command_id": read.get("command_id", rid)}
+            current = bool(reply["on_off"])
         action = "off" if current else "on"
         self._expect(ieee, action)
         result = await self._command(
