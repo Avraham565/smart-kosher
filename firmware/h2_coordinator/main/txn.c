@@ -46,7 +46,12 @@ txn_handle_t txn_alloc(txn_table_t *table, txn_kind_t kind, const char *rid,
 
         memset(slot, 0, sizeof(*slot));
         slot->in_use      = true;
-        slot->generation  = table->next_generation++;
+        /* Masked to the width the handle can actually carry. The handle
+         * packs the generation above the index byte and txn_get reads it
+         * back with >> 8, so a slot storing more than 24 bits could never
+         * match its own handle again -- from 0x01000000 on, every txn_get
+         * returned NULL while the table went on issuing handles. */
+        slot->generation  = (table->next_generation++) & 0xFFFFFFu;
         slot->kind        = kind;
         slot->short_addr  = short_addr;
         slot->endpoint    = endpoint;

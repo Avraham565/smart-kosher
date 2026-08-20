@@ -395,6 +395,28 @@ static void test_match_without_an_endpoint_behaves_as_before(void)
           == first, "with no endpoint known, the oldest still wins");
 }
 
+/* A handle packs the generation into the 24 bits above the index byte, so
+ * txn_get can only ever read back 24 bits of it -- while the slot stored the
+ * full 32. Past 0x01000000 the two could never agree again and every txn_get
+ * returned NULL: the table would still hand out handles, and every single
+ * confirmation would find nothing. Slow to arrive and total when it does. */
+static void test_generation_survives_the_handle_field_wrapping(void)
+{
+    txn_table_t table;
+    txn_table_init(&table);
+    table.next_generation = 0xFFFFFEu;
+
+    txn_handle_t h[3];
+    for (int i = 0; i < 3; i++) {
+        h[i] = txn_alloc(&table, TXN_KIND_ON_OFF, "rid", 0x1111, 1, 0, 5000);
+        CHECK(h[i] != TXN_NONE, "allocation must succeed across the wrap");
+    }
+    for (int i = 0; i < 3; i++) {
+        CHECK(txn_get(&table, h[i]) != NULL,
+              "a handle issued across the generation wrap must still resolve");
+    }
+}
+
 /* ── runner ─────────────────────────────────────────────────────── */
 
 int main(void)
@@ -419,6 +441,7 @@ int main(void)
     test_endpoint_never_outranks_tsn();
     test_an_unexpected_endpoint_still_matches();
     test_match_without_an_endpoint_behaves_as_before();
+    test_generation_survives_the_handle_field_wrapping();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
