@@ -1431,6 +1431,22 @@ class PerGangStateTests(GatewayTestCase):
         self.assertTrue(self.gateway._state_for(IEEE, 1))
         self.assertTrue(self.gateway._state_for(IEEE, 2))
 
+    def test_endpoint_admits_is_symmetric(self):
+        """Three call sites lean on this, and they order the pair differently.
+
+        _on_state asks (what the waiter wanted, what the report said);
+        wait_for_report and _state_for ask (what the caller wants, what is
+        stored). That only works because the rule is symmetric. Written the
+        obvious-looking way -- ``want is None or want == seen`` -- it would
+        still read correctly, still pass every other test here, and break
+        _on_state alone: a report with no endpoint would stop waking waiters
+        that named one. Silently, on old firmware only.
+        """
+        for a, b in ((1, 1), (1, 2), (2, 1), (1, None), (None, 1), (None, None)):
+            with self.subTest(pair=(a, b)):
+                self.assertEqual(zigbee_gateway._endpoint_admits(a, b),
+                                 zigbee_gateway._endpoint_admits(b, a))
+
     def test_forgetting_a_device_drops_every_gang(self):
         self._two_gang()
         self.uart.feed(report_event(True, endpoint=1))
