@@ -552,7 +552,7 @@ class RegistryTests(GatewayTestCase):
         device = self.gateway.devices()[IEEE]
         self.assertTrue(device["reporting"], "OnOff reporting was disowned")
         self.assertNotIn("reporting_error", device)
-        self.assertNotIn(IEEE, self.gateway._reporting_retry)
+        self.assertNotIn((IEEE, 1), self.gateway._reporting_retry)
 
     def test_a_metering_success_cannot_vouch_for_the_switch(self):
         # The mirror image: a metering success from an older coordinator must
@@ -566,7 +566,7 @@ class RegistryTests(GatewayTestCase):
                                cluster=0x0702)
         self.assertFalse(self.gateway.devices()[IEEE]["reporting"],
                          "a metering result vouched for OnOff")
-        self.assertIn(IEEE, self.gateway._reporting_retry,
+        self.assertIn((IEEE, 1), self.gateway._reporting_retry,
                       "the OnOff retry must survive")
 
     def test_firmware_without_a_cluster_field_is_treated_as_on_off(self):
@@ -591,7 +591,7 @@ class RegistryTests(GatewayTestCase):
         self.gateway.pump_reporting()
         self.assertEqual(before, self._sent())
 
-        self.gateway._reporting_retry[IEEE]["due"] = ticks_ms() - 1
+        self.gateway._reporting_retry[(IEEE, 1)]["due"] = ticks_ms() - 1
         self.gateway.pump_reporting()
         self.assertEqual(before + 1, self._sent())
 
@@ -606,7 +606,7 @@ class RegistryTests(GatewayTestCase):
             self.join_device(ieee=ieee, short=short)
         for n in range(count):
             ieee, _ = self._addr(n)
-            self.gateway._reporting_retry[ieee]["due"] = ticks_ms() - (n + 1)
+            self.gateway._reporting_retry[(ieee, 1)]["due"] = ticks_ms() - (n + 1)
         # The joins above already spent the window; treat those attempts as
         # settled so each test measures its own sends.
         self.gateway._reporting_inflight.clear()
@@ -648,10 +648,10 @@ class RegistryTests(GatewayTestCase):
         for _ in range(400):
             self.gateway.pump_reporting()
             peak = max(peak, len(self.gateway._reporting_inflight))
-            for ieee in list(self.gateway._reporting_inflight):
+            for key in list(self.gateway._reporting_inflight):
                 self._reporting_result(
                     "reporting_configured", status="ok",
-                    short_addr=self.gateway._registry[ieee]["short_addr"])
+                    short_addr=self.gateway._registry[key[0]]["short_addr"])
         self.assertLessEqual(peak, 4, "window exceeded (peak %d)" % peak)
         self.assertGreaterEqual(self._sent() - base, 1000,
                                 "backlog never finished")
@@ -667,8 +667,8 @@ class RegistryTests(GatewayTestCase):
         self.assertEqual(4, self._sent() - base,
                          "no answer yet, so no new sends")
 
-        for ieee in list(self.gateway._reporting_inflight):
-            self.gateway._reporting_inflight[ieee] = ticks_ms() - 1
+        for key in list(self.gateway._reporting_inflight):
+            self.gateway._reporting_inflight[key] = ticks_ms() - 1
         self.gateway.pump_reporting()
         self.assertEqual(8, self._sent() - base, "credits must be reclaimed")
 
@@ -687,7 +687,7 @@ class RegistryTests(GatewayTestCase):
         self.join_device()
         self._reporting_result("reporting_failed", reason="bind_failed")
         self._reporting_result("reporting_configured", status="ok")
-        self.assertNotIn(IEEE, self.gateway._reporting_retry)
+        self.assertNotIn((IEEE, 1), self.gateway._reporting_retry)
 
         after = self.written_ops().count("enable_reporting")
         self.gateway.pump_reporting()
@@ -1335,6 +1335,82 @@ class ManualConfirmationEndpointTests(GatewayTestCase):
             outcome["confirmation"]["confirmed"],
             "the command went to endpoint 3 and only endpoint 1 answered, so "
             "nothing confirmed it -- an honest no, not a false yes")
+
+
+class ReportingEveryGangTests(GatewayTestCase):
+    """A multi-gang device is bound on every gang, not only the first.
+
+    Asserted by counting what goes *out*. The obvious check -- "gang 2 reports"
+    -- cannot distinguish a fixed hub from a device that was bound by hand
+    once: the bind lives in the device's own Zigbee table, survives a reboot,
+    and the firmware exposes no unbind. On the bench rig that check is green
+    before the fix and after it, which is the shape of every false green this
+    work has been chasing. The frames on the wire are not.
+    """
+
+    def _sent_endpoints(self):
+        return [m["payload"]["endpoint"] for m in self.uart.written
+                if m["op"] == "enable_reporting"]
+
+    def _discover(self, endpoints, onoff):
+        """Join, then let endpoint and cluster discovery arrive as they do."""
+        self.join_device()
+        self.uart.feed({"version": 1, "type": "event", "op": "device_endpoints",
+                        "payload": {"short_addr": SHORT,
+                                    "endpoints": endpoints}})
+        for endpoint in endpoints:
+            clusters = [0, 3, 6] if endpoint in onoff else [0, 3]
+            self.uart.feed({"version": 1, "type": "event",
+                            "op": "device_clusters",
+                            "payload": {"short_addr": SHORT,
+                                        "endpoint": endpoint,
+                                        "in_clusters": clusters}})
+
+    def test_both_gangs_are_asked(self):
+        self._discover([1, 2], onoff=[1, 2])
+        self.assertEqual([1, 2], sorted(set(self._sent_endpoints())))
+
+    def test_an_endpoint_without_on_off_is_not_asked(self):
+        # 242 is Green Power on the real actuator: it is an endpoint, it is not
+        # a gang, and binding OnOff reporting on it is meaningless.
+        self._discover([1, 242], onoff=[1])
+        self.assertEqual([1], sorted(set(self._sent_endpoints())))
+
+    def test_a_third_gang_needs_no_new_code(self):
+        self._discover([1, 2, 3], onoff=[1, 2, 3])
+        self.assertEqual([1, 2, 3], sorted(set(self._sent_endpoints())))
+
+    def test_a_device_that_never_reports_clusters_is_unchanged(self):
+        # Old coordinator, no discovery: exactly one request, endpoint 1, which
+        # is what every device got before this.
+        self.join_device()
+        self.assertEqual([1], sorted(set(self._sent_endpoints())))
+
+    def test_one_gang_confirming_does_not_cancel_the_other(self):
+        # Keyed by ieee, the first success cleared the retry for the whole
+        # device and the second gang was never asked again.
+        self._discover([1, 2], onoff=[1, 2])
+        self.uart.feed({"version": 1, "type": "event",
+                        "op": "reporting_configured",
+                        "payload": {"short_addr": SHORT, "endpoint": 1,
+                                    "cluster": 6, "status": "ok"}})
+
+        self.assertIn((IEEE, 2), self.gateway._reporting_retry,
+                      "gang 2's retry was cancelled by gang 1's success")
+        self.assertNotIn((IEEE, 1), self.gateway._reporting_retry)
+
+    def test_reporting_is_claimed_only_when_every_gang_confirms(self):
+        self._discover([1, 2], onoff=[1, 2])
+        for endpoint in (1, 2):
+            self.assertFalse(self.gateway.devices()[IEEE]["reporting"])
+            self.uart.feed({"version": 1, "type": "event",
+                            "op": "reporting_configured",
+                            "payload": {"short_addr": SHORT,
+                                        "endpoint": endpoint,
+                                        "cluster": 6, "status": "ok"}})
+        self.assertTrue(self.gateway.devices()[IEEE]["reporting"])
+        self.assertEqual([1, 2],
+                         self.gateway.devices()[IEEE]["reporting_endpoints"])
 
 
 class PerGangStateTests(GatewayTestCase):

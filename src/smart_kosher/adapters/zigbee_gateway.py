@@ -313,9 +313,11 @@ class ZigbeeGateway(DeviceGateway):
                 item["unreachable"] = True
             # Why reporting is still off, so "its wall switch does nothing"
             # is diagnosable instead of just silent.
-            retry = self._reporting_retry.get(ieee)
-            if retry and retry.get("error"):
-                item["reporting_error"] = retry["error"]
+            for endpoint in self._onoff_endpoints(entry):
+                retry = self._reporting_retry.get((ieee, endpoint))
+                if retry and retry.get("error"):
+                    item["reporting_error"] = retry["error"]
+                    break
             out[ieee] = item
         return out
 
@@ -427,14 +429,53 @@ class ZigbeeGateway(DeviceGateway):
         # whole house back at once cannot turn into one frame per device.
         # Sending here directly was exactly that hole: the rate limit governed
         # retries while first attempts bypassed it.
-        state = self._reporting_retry.setdefault(ieee, {})
-        state["attempts"] = 0
-        state["due"] = ticks_ms()
+        self._arm_reporting(ieee, entry)
         self.pump_reporting()
 
     # ── reporting lifecycle (bind + configure, both fallible) ─────────
 
-    def _request_reporting(self, ieee, entry, attempts):
+    def _sync_reporting_flag(self, entry):
+        """``reporting`` means every OnOff endpoint reports, not just one.
+
+        Kept as a plain bool because devices(), the UI and pump_reporting all
+        read it and none of them are in this task. For a single-gang device it
+        means exactly what it always did; for a two-gang one it stops claiming
+        the device reports when only half of it does -- and the manual-override
+        rule does not hold for a gang nobody bound.
+        """
+        confirmed = entry.get("reporting_endpoints") or []
+        entry["reporting"] = all(endpoint in confirmed
+                                 for endpoint in self._onoff_endpoints(entry))
+
+    def _onoff_endpoints(self, entry):
+        """Every endpoint on this device that speaks OnOff.
+
+        From the device's own cluster discovery, never from its model number.
+        Falls back to the entry's single endpoint while discovery is still in
+        flight, or against a coordinator too old to report clusters at all --
+        which is exactly the behaviour every device had before this.
+        """
+        clusters = entry.get("clusters") or {}
+        found = [endpoint for endpoint in (entry.get("endpoints") or [])
+                 if _CLUSTER_ON_OFF in (clusters.get(str(endpoint)) or [])]
+        return found or [entry.get("endpoint", 1)]
+
+    def _arm_reporting(self, ieee, entry):
+        """Queue a reporting request for each OnOff endpoint not yet confirmed.
+
+        Enqueue rather than send, for the reason _on_device_joined gives: a
+        mains outage that brings a whole house back at once must not turn into
+        one frame per device per gang.
+        """
+        confirmed = entry.get("reporting_endpoints") or []
+        for endpoint in self._onoff_endpoints(entry):
+            if endpoint in confirmed:
+                continue
+            state = self._reporting_retry.setdefault((ieee, endpoint), {})
+            state.setdefault("attempts", 0)
+            state.setdefault("due", ticks_ms())
+
+    def _request_reporting(self, ieee, entry, endpoint, attempts):
         """Ask the coordinator to bind + configure reporting, and arm a retry.
 
         Idempotent and cheap to repeat, so re-requesting is always safe. The
@@ -443,17 +484,20 @@ class ZigbeeGateway(DeviceGateway):
         """
         self._write_cmd("enable_reporting",
                         {"short_addr": entry["short_addr"],
-                         "endpoint": entry.get("endpoint", 1)})
+                         "endpoint": endpoint})
         delay = _REPORTING_RETRY_BASE_MS * (1 << min(attempts, 4))
         if delay > _REPORTING_RETRY_MAX_MS:
             delay = _REPORTING_RETRY_MAX_MS
-        state = self._reporting_retry.setdefault(ieee, {})
+        state = self._reporting_retry.setdefault((ieee, endpoint), {})
         state["attempts"] = attempts + 1
         state["due"] = ticks_add(ticks_ms(), delay)
-        # Spend a credit. It comes back when the coordinator answers, or when
-        # this deadline passes with no answer at all.
-        self._reporting_inflight[ieee] = ticks_add(ticks_ms(),
-                                                   _REPORTING_INFLIGHT_MS)
+        # Spend a credit, per endpoint. bind + configure_reporting takes a slot
+        # in the coordinator's request table for each one, so a two-gang device
+        # really does cost two -- and the window exists to protect that table.
+        # Charging it once per device would over-commit exactly the resource
+        # the limit is for.
+        self._reporting_inflight[(ieee, endpoint)] = ticks_add(
+            ticks_ms(), _REPORTING_INFLIGHT_MS)
 
     def _on_reporting_result(self, payload, ok):
         ieee = self._ieee_for_short(payload.get("short_addr"))
@@ -477,23 +521,28 @@ class ZigbeeGateway(DeviceGateway):
                           hex(cluster), payload.get("reason"))
             return
 
-        self._reporting_inflight.pop(ieee, None)   # credit returned
+        endpoint = payload.get("endpoint", entry.get("endpoint", 1))
+        key = (ieee, endpoint)
+        self._reporting_inflight.pop(key, None)   # credit returned
+        confirmed = entry.setdefault("reporting_endpoints", [])
         if ok:
-            self._reporting_retry.pop(ieee, None)
-            if not entry.get("reporting"):
-                entry["reporting"] = True
+            self._reporting_retry.pop(key, None)
+            if endpoint not in confirmed:
+                confirmed.append(endpoint)
+                self._sync_reporting_flag(entry)
                 self._save_registry()
         else:
             reason = payload.get("reason") or payload.get("status") or "error"
-            state = self._reporting_retry.setdefault(ieee, {})
+            state = self._reporting_retry.setdefault(key, {})
             state.setdefault("attempts", 1)
             state.setdefault("due",
                              ticks_add(ticks_ms(), _REPORTING_RETRY_BASE_MS))
             state["error"] = reason
-            if entry.get("reporting"):
-                entry["reporting"] = False
+            if endpoint in confirmed:
+                confirmed.remove(endpoint)
+                self._sync_reporting_flag(entry)
                 self._save_registry()
-            self._log("zigbee reporting failed for", ieee, reason)
+            self._log("zigbee reporting failed for", ieee, endpoint, reason)
         # Self-clocking: an answer frees a credit, so the next device goes out
         # now rather than waiting for a timer that knows nothing about how fast
         # the coordinator is actually replying.
@@ -522,31 +571,37 @@ class ZigbeeGateway(DeviceGateway):
         # Reclaim credits from requests that were never answered. Without this
         # a coordinator that swallows one request would leak a credit and the
         # window would shrink to nothing.
-        for ieee in list(self._reporting_inflight):
-            if ticks_diff(self._reporting_inflight[ieee], now) <= 0:
-                del self._reporting_inflight[ieee]
+        for key in list(self._reporting_inflight):
+            if ticks_diff(self._reporting_inflight[key], now) <= 0:
+                del self._reporting_inflight[key]
 
         ready = []
-        for ieee in list(self._reporting_retry):
+        for key in list(self._reporting_retry):
+            ieee, endpoint = key
             entry = self._registry.get(ieee)
-            if entry is None or entry.get("reporting"):
-                self._reporting_retry.pop(ieee, None)
-                self._reporting_inflight.pop(ieee, None)
+            # Per endpoint, not per device. Keyed by ieee alone, the first gang
+            # to confirm cleared the retry for the whole device and the second
+            # was never asked again -- the same bug this task exists to fix,
+            # one layer up in the bookkeeping.
+            if entry is None or endpoint in (entry.get("reporting_endpoints")
+                                             or []):
+                self._reporting_retry.pop(key, None)
+                self._reporting_inflight.pop(key, None)
                 continue
-            if ieee in self._reporting_inflight:
+            if key in self._reporting_inflight:
                 continue
-            if ticks_diff(self._reporting_retry[ieee]["due"], now) <= 0:
-                ready.append(ieee)
+            if ticks_diff(self._reporting_retry[key]["due"], now) <= 0:
+                ready.append(key)
 
         # Longest-waiting first, so nothing is starved by newer arrivals.
-        ready.sort(key=lambda i: ticks_diff(self._reporting_retry[i]["due"], now))
-        for ieee in ready:
+        ready.sort(key=lambda k: ticks_diff(self._reporting_retry[k]["due"], now))
+        for key in ready:
             if len(self._reporting_inflight) >= _REPORTING_WINDOW:
                 break
             # Never give up: a switch that cannot report its own presses is a
             # broken product, and the backoff keeps a dead one cheap.
-            self._request_reporting(ieee, self._registry[ieee],
-                                    self._reporting_retry[ieee]["attempts"])
+            self._request_reporting(key[0], self._registry[key[0]], key[1],
+                                    self._reporting_retry[key]["attempts"])
 
     def _on_device_endpoints(self, payload):
         """The device's real endpoint list, discovered after it joined.
@@ -580,6 +635,12 @@ class ZigbeeGateway(DeviceGateway):
         self._save_registry()
         self._log("zigbee clusters for", ieee, payload.get("endpoint"),
                   clusters)
+        # This is the moment a second gang becomes known: device_joined only
+        # ever says endpoint 1, so until the clusters land there is nothing to
+        # tell OnOff on endpoint 2 from a Green Power endpoint that cannot
+        # switch anything. Arm whatever just became visible.
+        self._arm_reporting(ieee, entry)
+        self.pump_reporting()
 
     def _learn_capabilities(self, payload):
         caps = payload.get("capabilities")
@@ -603,7 +664,12 @@ class ZigbeeGateway(DeviceGateway):
         self._registry.pop(ieee, None)
         self._forget_device_state(ieee)
         self._suspect.pop(ieee, None)
-        self._reporting_retry.pop(ieee, None)
+        for key in list(self._reporting_retry):
+            if key[0] == ieee:
+                del self._reporting_retry[key]
+        for key in list(self._reporting_inflight):
+            if key[0] == ieee:
+                del self._reporting_inflight[key]
         self._save_registry()
         self._log("zigbee device left:", ieee)
 
