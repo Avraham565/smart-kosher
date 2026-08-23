@@ -127,9 +127,14 @@ async def _clock_refresh(api):
 
 
 async def _devices_refresh(api):
-    """Publish live device state (from the gateway registry) and the endpoint
-    list into the store, so the House page renders/toggles reactively. While
-    pairing, auto-adopt the first joined device that is not yet an endpoint."""
+    """Publish live device state and the entity list into the store, so the
+    House page renders and toggles reactively.
+
+    It used to adopt the first unclaimed device by itself while pairing, which
+    is why the add screen exists and why that is gone: a grab that happens
+    before the user has chosen anything makes a two-gang switch one entity
+    named after a count, and leaves nothing for a list to show.
+    """
     while True:
         try:
             raw = await api.dispatch("zigbee.devices")
@@ -137,37 +142,27 @@ async def _devices_refresh(api):
             # (state_age_ms would differ every call).
             devices = {}
             for ieee, entry in raw.items():
-                devices[ieee] = {"on_off": entry.get("on_off"),
-                                 "unreachable": bool(entry.get("unreachable")),
-                                 "endpoint": entry.get("endpoint", 1)}
+                devices[ieee] = {
+                    "on_off": entry.get("on_off"),
+                    "unreachable": bool(entry.get("unreachable")),
+                    "endpoint": entry.get("endpoint", 1),
+                    # The add screen derives one row per gang from these two,
+                    # and cannot without them. Both are stable -- they change
+                    # on discovery, not on every poll -- so the repaint-skip
+                    # this dict exists for still holds.
+                    "endpoints": entry.get("endpoints"),
+                    "clusters": entry.get("clusters"),
+                    "endpoint_on_off": entry.get("endpoint_on_off"),
+                }
             store.devices.set(devices)
             endpoints = await api.dispatch("endpoints.list")
             store.endpoints.set(endpoints)
             store.zones.set(await api.dispatch("zones.list"))
             store.groups.set(await api.dispatch("groups.list"))
             store.schedules.set(await api.dispatch("schedules.list"))
-            if store.pairing.get() is not None:
-                await _try_autopair(api, devices, endpoints)
         except Exception as exc:
             print("devices refresh error:", exc)
         await asyncio.sleep(_DEVICES_PERIOD_S)
-
-
-async def _try_autopair(api, devices, endpoints):
-    zone_id = store.pairing.get()
-    linked = set(ep.get("ieee_address") for ep in endpoints)
-    for ieee, entry in devices.items():
-        if ieee and ieee not in linked:
-            data = {"name": "מכשיר {}".format(len(endpoints) + 1),
-                    "ieee_address": ieee,
-                    "zigbee_endpoint": entry.get("endpoint", 1)}
-            if zone_id:
-                data["zone_id"] = zone_id
-            await api.dispatch("endpoints.create", {"data": data})
-            store.pairing.set(None)
-            store.endpoints.set(await api.dispatch("endpoints.list"))
-            print("paired new device:", ieee, "-> zone", zone_id)
-            break
 
 
 async def _zigbee_reader(gateway, uart):

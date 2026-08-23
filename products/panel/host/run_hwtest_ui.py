@@ -42,6 +42,7 @@ PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
            "clock.py", "bridge.py", "store.py", "hebdate.py", "reactive.py",
            # the paging work: the three list pages and their shared arithmetic
            "pager.py", "rooms_page.py", "room_page.py", "schedules_page.py",
+           "add_device_page.py",
            "zone_picker.py", "text_input.py", "dev_common.py", "toast.py",
            "sched_describe.py", "sched_labels.py",
            # Reachable only through imports that fire on a tap this suite never

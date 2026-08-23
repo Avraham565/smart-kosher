@@ -732,6 +732,67 @@ def test_reopening_does_not_leak(home):
     _check("reopen: back on the calling screen", lv.screen_active() is home)
 
 
+# ── add-device list: one row per gang ────────────────────────────────────────
+
+def _dev(endpoints, onoff, on_off=None):
+    clusters = {}
+    for ep in endpoints:
+        clusters[str(ep)] = [0, 3, 6] if ep in onoff else [0, 3]
+    return {"on_off": on_off, "unreachable": False, "endpoint": endpoints[0],
+            "endpoints": endpoints, "clusters": clusters}
+
+
+def test_add_device_rows():
+    import add_device_page
+    import store
+    IEEE = "70:d0:7e:ff:fe:6e:c6:40"
+    ACT = "78:1c:9d:ff:fe:12:76:fa"
+
+    store.endpoints.set([])
+    store.devices.set({IEEE: _dev([1, 2], [1, 2])})
+    ready, pending = add_device_page.rows()
+    _check("add: a two-gang switch offers two rows",
+           [x["endpoint"] for x in ready] == [1, 2], str(ready))
+    _check("add: nothing pending once clusters are known", pending == [])
+
+    # Adopting gang 1 must not take gang 2 off the list. Written by ieee alone
+    # this is where gang 2 vanishes.
+    store.endpoints.set([{"ieee_address": IEEE, "zigbee_endpoint": 1}])
+    ready, _ = add_device_page.rows()
+    _check("add: gang 2 survives gang 1 being adopted",
+           [x["endpoint"] for x in ready] == [2], str(ready))
+
+    # Green Power is an endpoint, not a gang.
+    store.endpoints.set([])
+    store.devices.set({ACT: _dev([1, 242], [1])})
+    ready, _ = add_device_page.rows()
+    _check("add: endpoint 242 is not offered as a gang",
+           [x["endpoint"] for x in ready] == [1], str(ready))
+
+    # Three gangs, no new code.
+    store.devices.set({IEEE: _dev([1, 2, 3], [1, 2, 3])})
+    ready, _ = add_device_page.rows()
+    _check("add: a three-gang switch offers three rows",
+           [x["endpoint"] for x in ready] == [1, 2, 3], str(ready))
+
+    # Discovery not finished: shown as pending, never as a single gang.
+    store.devices.set({IEEE: {"on_off": None, "unreachable": False,
+                              "endpoint": 1, "endpoints": None,
+                              "clusters": None}})
+    ready, pending = add_device_page.rows()
+    _check("add: a freshly joined device is pending, not one gang",
+           ready == [] and pending == [IEEE], "{} {}".format(ready, pending))
+
+    store.devices.set({IEEE: {"on_off": None, "unreachable": False,
+                              "endpoint": 1, "endpoints": [1, 2],
+                              "clusters": {"1": [0, 3, 6]}}})
+    ready, pending = add_device_page.rows()
+    _check("add: half-discovered is still pending",
+           ready == [] and pending == [IEEE], "{} {}".format(ready, pending))
+    store.devices.set({})
+    store.endpoints.set([])
+
+
 def run():
     print("== UI hardware tests ==")
     print("bringing up the display")
@@ -750,6 +811,7 @@ def run():
     test_the_wizard_stays_on_the_glass(home)
     test_deleting_a_sub_page_releases_its_clock(home)
     test_reopening_does_not_leak(home)
+    test_add_device_rows()
 
     failed = [name for name, ok, _ in _results if not ok]
     print()

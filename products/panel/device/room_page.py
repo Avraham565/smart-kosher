@@ -72,6 +72,11 @@ def _add_device(e):
     else:
         store.pairing.set(zone_id)
         bridge.dispatch(store.api, "zigbee.permit_join", {"duration": 180})
+        # The window is open; the screen shows what walks in. Nothing is
+        # adopted until the user picks a row -- main._try_autopair used to do
+        # it for them, one entity per device, before they had chosen anything.
+        import add_device_page
+        add_device_page.open(zone_id)
 
 
 def _back():
