@@ -1620,6 +1620,63 @@ class DiscardAndIdentifyTests(GatewayTestCase):
         self.assertFalse(result["identified"])
         self.assertNotIn("on_off", self.written_ops())
 
+    def test_two_overlapping_pulses_do_not_invert_the_load(self):
+        """The finally is not enough on its own.
+
+        A reads off and switches on. B, inside A's hold, reads *on* -- the
+        state A just created -- and switches off. A restores to off, correctly
+        for what A saw. B restores to on, correctly for what B saw. The lamp is
+        left on, and both calls report restored: True. Nothing anywhere says
+        the load was left inverted.
+
+        A person identifying gangs taps rows in exactly that rhythm, and 1.5
+        seconds is a wide window on a touchscreen.
+        """
+        self.join_device()
+        state = self._answering(False)
+
+        async def scenario():
+            first = asyncio.ensure_future(
+                self.gateway.identify(IEEE, 1, hold_ms=80))
+            await asyncio.sleep(0.01)          # inside the hold
+            second = await self.gateway.identify(IEEE, 1, hold_ms=80)
+            return await first, second
+
+        first, second = run(scenario())
+
+        self.assertTrue(first["restored"])
+        self.assertFalse(second["identified"])
+        self.assertEqual("identify_in_progress", second["error"])
+        self.assertFalse(state["on_off"],
+                         "overlapping identifies left the load inverted")
+
+    def test_the_lock_is_per_device_not_per_gang(self):
+        # Two gangs of one switch flashing at once confuses the person watching
+        # as much as it confuses the code.
+        self.join_device()
+        self._answering(False)
+
+        async def scenario():
+            first = asyncio.ensure_future(
+                self.gateway.identify(IEEE, 1, hold_ms=80))
+            await asyncio.sleep(0.01)
+            second = await self.gateway.identify(IEEE, 2, hold_ms=80)
+            await first
+            return second
+
+        self.assertEqual("identify_in_progress", run(scenario())["error"])
+
+    def test_a_pulse_that_dies_does_not_lock_identify_out_for_good(self):
+        # The task 11 lesson: a coroutine that never runs its finally would
+        # hold a boolean flag forever. Only a deadline makes that impossible.
+        self.join_device()
+        self._answering(False)
+        self.gateway._identify_inflight[IEEE] = ticks_ms() - 1   # expired
+
+        result = run(self.gateway.identify(IEEE, 1, hold_ms=10))
+
+        self.assertTrue(result["identified"])
+
     def test_identify_validates_its_endpoint(self):
         self.join_device()
         api = self._api()

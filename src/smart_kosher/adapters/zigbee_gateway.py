@@ -86,6 +86,10 @@ _PROBE_INFLIGHT_MS = 8000
 # trade -- the registry is the only record that a device belongs to this house,
 # so losing a second of it to a power cut is the most this may ever risk.
 _REGISTRY_COALESCE_MS = 1000
+# How long past its own hold an identify keeps the device to itself. One read,
+# one flip and one restore, so three round trips beyond the hold; the ack
+# timeout is what bounds each of them.
+_IDENTIFY_SLACK_ACKS = 4
 
 # Enabling reporting is bind + configure_reporting *on the device*, and either
 # half can fail after the command itself was accepted -- the outcome only
@@ -170,6 +174,15 @@ class ZigbeeGateway(DeviceGateway):
         # None when clean; otherwise the tick by which the registry must reach
         # the flash. See _REGISTRY_COALESCE_MS.
         self._registry_due = None
+        # ieee -> deadline while an identify pulse owns this device. Keyed by
+        # ieee, not by gang: two gangs of one switch flashing at once confuses
+        # the person watching exactly as much as it confuses the code.
+        #
+        # A deadline rather than a flag, for the reason _probe_inflight carries
+        # one (task 11): a coroutine that dies mid-pulse never runs its finally,
+        # and a boolean would then lock identify out for the life of the
+        # process.
+        self._identify_inflight = {}
         self._reporting_retry = {}
         # ieee -> credit expiry, for requests sent and not yet answered.
         self._reporting_inflight = {}
@@ -200,6 +213,15 @@ class ZigbeeGateway(DeviceGateway):
         if not self._registry_path:
             return {}
         self._registry_due = None
+        # ieee -> deadline while an identify pulse owns this device. Keyed by
+        # ieee, not by gang: two gangs of one switch flashing at once confuses
+        # the person watching exactly as much as it confuses the code.
+        #
+        # A deadline rather than a flag, for the reason _probe_inflight carries
+        # one (task 11): a coroutine that dies mid-pulse never runs its finally,
+        # and a boolean would then lock identify out for the life of the
+        # process.
+        self._identify_inflight = {}
         temporary = self._registry_path + ".tmp"
         backup = self._registry_path + ".bak"
         candidates = (self._registry_path, temporary, backup)
@@ -251,6 +273,15 @@ class ZigbeeGateway(DeviceGateway):
         if not self._registry_path:
             return
         self._registry_due = None
+        # ieee -> deadline while an identify pulse owns this device. Keyed by
+        # ieee, not by gang: two gangs of one switch flashing at once confuses
+        # the person watching exactly as much as it confuses the code.
+        #
+        # A deadline rather than a flag, for the reason _probe_inflight carries
+        # one (task 11): a coroutine that dies mid-pulse never runs its finally,
+        # and a boolean would then lock identify out for the life of the
+        # process.
+        self._identify_inflight = {}
         temporary = self._registry_path + ".tmp"
         backup = self._registry_path + ".bak"
         try:
@@ -306,6 +337,7 @@ class ZigbeeGateway(DeviceGateway):
 
     def _forget_device_state(self, ieee):
         """Drop every gang's cell for one device."""
+        self._identify_inflight.pop(ieee, None)
         for store in (self._states, self._state_ms, self._expected):
             for key in list(store):
                 if key[0] == ieee:
@@ -1255,6 +1287,29 @@ class ZigbeeGateway(DeviceGateway):
         entry = self._registry.get(ieee)
         if entry is None:
             return {"identified": False, "error": "unknown device"}
+        # One pulse per device at a time. Two overlapping calls each read the
+        # state the other had just changed, and each restored to that: A reads
+        # off and turns it on, B reads on and turns it off, A puts back off, B
+        # puts back on -- and the load is left inverted while both report
+        # restored. That is the same outcome the finally exists to prevent,
+        # reached from the other side, and it is easy to hit: a person
+        # identifying gangs taps rows in exactly this rhythm.
+        #
+        # Guarded here and not in the screen. This op is in self._ops, so it is
+        # on the shared surface and the web channel reaches it too; two clients
+        # with no knowledge of each other cannot coordinate a lock between them.
+        now = ticks_ms()
+        held = self._identify_inflight.get(ieee)
+        if held is not None and ticks_diff(held, now) > 0:
+            return {"identified": False, "error": "identify_in_progress"}
+        self._identify_inflight[ieee] = ticks_add(
+            now, hold_ms + _IDENTIFY_SLACK_ACKS * self._ack_timeout_ms)
+        try:
+            return await self._identify_pulse(entry, endpoint, hold_ms)
+        finally:
+            self._identify_inflight.pop(ieee, None)
+
+    async def _identify_pulse(self, entry, endpoint, hold_ms):
         short = entry["short_addr"]
         read = await self._command(
             "read_attr", {"short_addr": short, "endpoint": endpoint})

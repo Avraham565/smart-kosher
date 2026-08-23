@@ -133,9 +133,16 @@ def _identify(row):
 
 
 def _identified(result):
+    result = result or {}
+    # Tapping two rows inside one pulse is the natural rhythm of "which one is
+    # this?", and the gateway refuses the second rather than let the two undo
+    # each other. Say so, or the row looks broken.
+    if result.get("error") == "identify_in_progress":
+        _toast("מכשיר זה כבר מהבהב — המתן רגע")
+        return
     # The restore is the half that can hurt, so its failure is spoken rather
     # than swallowed: the load is left inverted and only the user can see it.
-    if (result or {}).get("restored") is False:
+    if result.get("restored") is False:
         _toast("הזיהוי בוצע אך המצב לא הוחזר — בדוק את המכשיר")
 
 
