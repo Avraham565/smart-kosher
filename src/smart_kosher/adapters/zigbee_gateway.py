@@ -120,17 +120,21 @@ class ZigbeeGateway(DeviceGateway):
         # ieee -> bool. STRICTLY the device's own word (attribute_report or a
         # read_attr ack). wait_for_report's whole value is that this is never
         # anything we merely believe, so nothing else may write here.
+        # (ieee, endpoint) -> bool. One cell per *gang*, not per device: a
+        # two-gang switch is one ieee with two relays, and while these shared
+        # a cell the later report overwrote the other. That was not only a
+        # display fault -- _toggle picks its direction from here, so a toggle
+        # on gang 1 after a report from gang 2 sent the opposite command.
+        #
+        # ``endpoint`` is None for firmware that does not say which gang
+        # reported. Lookups go through _state_for, which falls back on the
+        # same _endpoint_admits rule the waiters use rather than a second one.
         self._states = {}
         self._state_ms = {}
-        # ieee -> the endpoint the last report came from, or None when it
-        # did not say. Companion to _states, NOT a re-keying of it: which
-        # gang owns which state is the known multi-gang gap and a separate
-        # job. This exists so a waiter that named a gang cannot be answered
-        # by its neighbour.
-        self._state_ep = {}
-        # ieee -> bool we last commanded and have no reason to doubt. Kept
-        # apart from _states for the reason above; cleared the moment the
-        # device actually says something.
+        # (ieee, endpoint) -> bool we last commanded and have no reason to
+        # doubt. Kept apart from _states for the reason above, and keyed the
+        # same way for the reason above that: the manual-override rule rests
+        # on these two disagreeing, which a shared cell made meaningless.
         self._expected = {}
         # ieee -> [(asyncio.Event, endpoint or None), ...] — state waiters
         self._state_waiters = {}
@@ -233,21 +237,78 @@ class ZigbeeGateway(DeviceGateway):
 
     # ── public views for status/UI ─────────────────────────────────────
 
+    def _state_for(self, ieee, endpoint):
+        """Last reported state of one gang, or None.
+
+        Exact key first, then any report for this device that did not say
+        which gang it came from -- old firmware keeps answering for every
+        endpoint exactly as it did before, and that fallback is
+        _endpoint_admits rather than a rule of its own.
+        """
+        if (ieee, endpoint) in self._states:
+            return self._states[(ieee, endpoint)]
+        for key in self._states:
+            if key[0] == ieee and _endpoint_admits(endpoint, key[1]):
+                return self._states[key]
+        return None
+
+    def _expected_for(self, ieee, endpoint):
+        """What we last commanded this gang, or None."""
+        if (ieee, endpoint) in self._expected:
+            return self._expected[(ieee, endpoint)]
+        for key in self._expected:
+            if key[0] == ieee and _endpoint_admits(endpoint, key[1]):
+                return self._expected[key]
+        return None
+
+    def _state_age_for(self, ieee, endpoint):
+        if (ieee, endpoint) in self._state_ms:
+            return self._state_ms[(ieee, endpoint)]
+        for key in self._state_ms:
+            if key[0] == ieee and _endpoint_admits(endpoint, key[1]):
+                return self._state_ms[key]
+        return None
+
+    def _forget_device_state(self, ieee):
+        """Drop every gang's cell for one device."""
+        for store in (self._states, self._state_ms, self._expected):
+            for key in list(store):
+                if key[0] == ieee:
+                    del store[key]
+
     def devices(self):
         """Registry + last known on/off state, keyed by ieee."""
         out = {}
         for ieee, entry in self._registry.items():
             item = dict(entry)
-            if ieee in self._states:
-                item["on_off"] = self._states[ieee]
-                item["state_age_ms"] = ticks_diff(
-                    ticks_ms(), self._state_ms[ieee])
-            if ieee in self._expected:
+            primary = entry.get("endpoint", 1)
+            # ``on_off`` stays what it always was -- the entry's own endpoint
+            # -- so every existing caller keeps reading the same thing. What
+            # changes is that gang 2's report can no longer land in it.
+            state = self._state_for(ieee, primary)
+            if state is not None:
+                item["on_off"] = state
+                age = self._state_age_for(ieee, primary)
+                if age is not None:
+                    item["state_age_ms"] = ticks_diff(ticks_ms(), age)
+            expected = self._expected_for(ieee, primary)
+            if expected is not None:
                 # A command we sent outranks a report from before it. Without
                 # this the UI flipped back to the old state on the next poll
                 # and then to the new one when the report landed -- a visible
                 # off / on / off bounce on every tap.
-                item["on_off"] = self._expected[ieee]
+                item["on_off"] = expected
+            # Per gang, for callers that address more than the primary one.
+            # Additive: nothing that read on_off has to learn about this.
+            per_gang = {}
+            for endpoint in entry.get("endpoints", [primary]):
+                value = self._expected_for(ieee, endpoint)
+                if value is None:
+                    value = self._state_for(ieee, endpoint)
+                if value is not None:
+                    per_gang[endpoint] = value
+            if per_gang:
+                item["endpoint_on_off"] = per_gang
             if self._suspect.get(ieee):
                 item["unreachable"] = True
             # Why reporting is still off, so "its wall switch does nothing"
@@ -540,10 +601,7 @@ class ZigbeeGateway(DeviceGateway):
             self._suspect[ieee] = True
             return
         self._registry.pop(ieee, None)
-        self._states.pop(ieee, None)
-        self._state_ms.pop(ieee, None)
-        self._state_ep.pop(ieee, None)
-        self._expected.pop(ieee, None)
+        self._forget_device_state(ieee)
         self._suspect.pop(ieee, None)
         self._reporting_retry.pop(ieee, None)
         self._save_registry()
@@ -554,10 +612,13 @@ class ZigbeeGateway(DeviceGateway):
         if not ieee or "on_off" not in payload:
             return
         endpoint = payload.get("endpoint")
-        self._expected.pop(ieee, None)   # the device spoke; stop guessing
-        self._states[ieee] = bool(payload["on_off"])
-        self._state_ms[ieee] = ticks_ms()
-        self._state_ep[ieee] = endpoint
+        # The device spoke -- stop guessing, but only about the gang it spoke
+        # for. A report from gang 2 says nothing about what gang 1 is doing.
+        for key in list(self._expected):
+            if key[0] == ieee and _endpoint_admits(key[1], endpoint):
+                del self._expected[key]
+        self._states[(ieee, endpoint)] = bool(payload["on_off"])
+        self._state_ms[(ieee, endpoint)] = ticks_ms()
         self._suspect.pop(ieee, None)  # it spoke — clearly reachable
         # Waking every waiter for the ieee is what let gang 2's report confirm
         # a command sent to gang 1. A waiter this report cannot answer stays
@@ -598,13 +659,12 @@ class ZigbeeGateway(DeviceGateway):
         """
         deadline = ticks_add(ticks_ms(), timeout_ms)
         while True:
-            if (self._states.get(ieee) == expect
-                    and _endpoint_admits(endpoint, self._state_ep.get(ieee))):
+            if self._state_for(ieee, endpoint) == expect:
                 return {"confirmed": True, "observed": expect}
             remaining = ticks_diff(deadline, ticks_ms())
             if remaining <= 0:
                 return {"confirmed": False,
-                        "observed": self._states.get(ieee)}
+                        "observed": self._state_for(ieee, endpoint)}
             evt = asyncio.Event()
             entry = (evt, endpoint)
             self._state_waiters.setdefault(ieee, []).append(entry)
@@ -615,7 +675,7 @@ class ZigbeeGateway(DeviceGateway):
                 if entry in waiters:
                     waiters.remove(entry)
                 return {"confirmed": False,
-                        "observed": self._states.get(ieee)}
+                        "observed": self._state_for(ieee, endpoint)}
 
     # ── outbound: commands with ack correlation ────────────────────────
 
@@ -861,9 +921,9 @@ class ZigbeeGateway(DeviceGateway):
         await asyncio.gather(*workers)
         return results
 
-    def _expect(self, ieee, action):
-        """Believe our own command until the device says otherwise."""
-        self._expected[ieee] = (action == "on")
+    def _expect(self, ieee, endpoint, action):
+        """Believe our own command until that gang says otherwise."""
+        self._expected[(ieee, endpoint)] = (action == "on")
 
     async def _deliver_one(self, target, action, rid):
         ieee, short, zcl_ep = target
@@ -873,14 +933,14 @@ class ZigbeeGateway(DeviceGateway):
             # Set before the round trip, not after: a poll landing while the
             # command is still in flight would otherwise read the pre-command
             # state and undo the UI's optimistic update.
-            self._expect(ieee, action)
+            self._expect(ieee, zcl_ep, action)
             result = await self._command(
                 "on_off",
                 {"state": action, "short_addr": short, "endpoint": zcl_ep},
                 rid=rid)
             if result["status"] not in EXECUTION_SUCCESS_STATUSES:
                 # It did not get through, so stop claiming it did.
-                self._expected.pop(ieee, None)
+                self._expected.pop((ieee, zcl_ep), None)
         if result["status"] == "timeout" and not self._down:
             # Coordinator link looks fine but this device is silent — the
             # classic stale short_addr after an unseen rejoin.
@@ -893,7 +953,7 @@ class ZigbeeGateway(DeviceGateway):
         read_attr is only the cold-cache fallback. Still deliberately
         non-atomic (arch decision) — which is exactly why the domain layer
         bans toggle in schedules."""
-        current = self._states.get(ieee)
+        current = self._state_for(ieee, zcl_ep)
         if current is None:
             read = await self._command(
                 "read_attr", {"short_addr": short, "endpoint": zcl_ep},
@@ -916,13 +976,13 @@ class ZigbeeGateway(DeviceGateway):
                         "command_id": read.get("command_id", rid)}
             current = bool(reply["on_off"])
         action = "off" if current else "on"
-        self._expect(ieee, action)
+        self._expect(ieee, zcl_ep, action)
         result = await self._command(
             "on_off",
             {"state": action, "short_addr": short, "endpoint": zcl_ep},
             rid=rid)
         if result["status"] not in EXECUTION_SUCCESS_STATUSES:
-            self._expected.pop(ieee, None)
+            self._expected.pop((ieee, zcl_ep), None)
         return result
 
     def _resolve_targets(self, target_type, target_id):
@@ -1009,15 +1069,23 @@ class ZigbeeGateway(DeviceGateway):
     async def permit_join(self, duration):
         return await self._command("permit_join", {"duration": duration})
 
-    async def read_state(self, ieee):
+    async def read_state(self, ieee, endpoint=None):
+        """Ask one gang what state it is in.
+
+        ``endpoint`` defaults to the registry's own, which is what every
+        caller got before and is right for a single-gang device. Without the
+        parameter there was no way to read gang 2 at all -- and a caller that
+        flips a relay to identify it has to be able to put it back.
+        """
         entry = self._registry.get(ieee)
         if entry is None:
             return {"status": "error", "error": "unknown device",
                     "command_id": ""}
+        if endpoint is None:
+            endpoint = entry.get("endpoint", 1)
         return await self._command(
             "read_attr",
-            {"short_addr": entry["short_addr"],
-             "endpoint": entry.get("endpoint", 1)})
+            {"short_addr": entry["short_addr"], "endpoint": endpoint})
 
     async def read_report_config(self, ieee):
         """What reporting interval the device is ACTUALLY running.
@@ -1038,10 +1106,7 @@ class ZigbeeGateway(DeviceGateway):
 
     def forget_device(self, ieee):
         entry = self._registry.pop(ieee, None)
-        self._states.pop(ieee, None)
-        self._state_ms.pop(ieee, None)
-        self._state_ep.pop(ieee, None)
-        self._expected.pop(ieee, None)
+        self._forget_device_state(ieee)
         self._save_registry()
         if entry is None:
             return {"removed": False}

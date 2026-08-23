@@ -1337,6 +1337,111 @@ class ManualConfirmationEndpointTests(GatewayTestCase):
             "nothing confirmed it -- an honest no, not a false yes")
 
 
+class PerGangStateTests(GatewayTestCase):
+    """One state cell per gang, not per device.
+
+    A two-gang switch is one ieee with two relays. While they shared a cell the
+    later report simply overwrote the other, and that was never only a display
+    fault: _toggle picks which direction to send by reading the same cell, and
+    the manual-override rule rests on _expected disagreeing with _states.
+
+    Demonstrated on the bench before it was fixed -- a wait on gang 1 returned
+    observed: True while gang 1 was off, because gang 2 had just reported.
+    """
+
+    def _two_gang(self):
+        self.join_device()
+        self.uart.feed({"version": 1, "type": "event", "op": "device_endpoints",
+                        "payload": {"short_addr": SHORT, "endpoints": [1, 2]}})
+
+    def test_the_neighbours_report_does_not_land_in_this_gangs_cell(self):
+        self._two_gang()
+        self.uart.feed(report_event(False, endpoint=1))
+        self.uart.feed(report_event(True, endpoint=2))
+
+        self.assertFalse(self.gateway.devices()[IEEE]["on_off"],
+                         "gang 2's report was displayed as gang 1's state")
+
+    def test_each_gang_is_readable_separately(self):
+        self._two_gang()
+        self.uart.feed(report_event(False, endpoint=1))
+        self.uart.feed(report_event(True, endpoint=2))
+
+        self.assertEqual({1: False, 2: True},
+                         self.gateway.devices()[IEEE]["endpoint_on_off"])
+
+    def test_toggle_flips_its_own_gang_not_its_neighbour(self):
+        # The consequence that reaches a relay. Gang 1 is off, so toggling it
+        # must send "on". Reading the shared cell finds gang 2's True and
+        # sends "off" -- the opposite command, to the right gang.
+        self._two_gang()
+        self.uart.feed(report_event(False, endpoint=1))
+        self.uart.feed(report_event(True, endpoint=2))
+        self.uart.autoresponder = lambda m: [ack_for(m)]
+
+        run(self.gateway.send(make_event("toggle")))
+
+        cmd = [m for m in self.uart.written if m["op"] == "on_off"][-1]
+        self.assertEqual("on", cmd["payload"]["state"])
+        self.assertEqual(1, cmd["payload"]["endpoint"])
+
+    def test_read_state_addresses_the_gang_it_was_asked_for(self):
+        # Without the parameter there was no way to read gang 2 at all, and a
+        # caller that flips a relay to identify it must be able to put it back.
+        self._two_gang()
+        self.uart.autoresponder = lambda m: [
+            ack_for(m, {"on_off": True, "short_addr": SHORT})]
+
+        run(self.gateway.read_state(IEEE, endpoint=2))
+
+        cmd = [m for m in self.uart.written if m["op"] == "read_attr"][-1]
+        self.assertEqual(2, cmd["payload"]["endpoint"])
+
+    def test_read_state_without_an_endpoint_is_unchanged(self):
+        self._two_gang()
+        self.uart.autoresponder = lambda m: [
+            ack_for(m, {"on_off": True, "short_addr": SHORT})]
+
+        run(self.gateway.read_state(IEEE))
+
+        cmd = [m for m in self.uart.written if m["op"] == "read_attr"][-1]
+        self.assertEqual(1, cmd["payload"]["endpoint"])
+
+    def test_a_command_to_one_gang_claims_nothing_about_the_other(self):
+        # _expected carries the same fault, and the manual-override rule is
+        # what rests on it: a legitimate change on gang 2 must not read as
+        # gang 1 drifting from what we commanded.
+        self._two_gang()
+        self.uart.autoresponder = lambda m: [ack_for(m)]
+
+        run(self.gateway.send(make_event("on")))
+
+        self.assertTrue(self.gateway._expected_for(IEEE, 1))
+        self.assertIsNone(self.gateway._expected_for(IEEE, 2))
+
+    def test_a_report_that_names_no_endpoint_still_answers_for_the_device(self):
+        # Firmware too old to say which gang. Same fallback the waiters use;
+        # behaviour here is exactly what it was before the re-keying.
+        self.join_device()
+        stale = report_event(True)
+        del stale["payload"]["endpoint"]
+        self.uart.feed(stale)
+
+        self.assertTrue(self.gateway.devices()[IEEE]["on_off"])
+        self.assertTrue(self.gateway._state_for(IEEE, 1))
+        self.assertTrue(self.gateway._state_for(IEEE, 2))
+
+    def test_forgetting_a_device_drops_every_gang(self):
+        self._two_gang()
+        self.uart.feed(report_event(True, endpoint=1))
+        self.uart.feed(report_event(True, endpoint=2))
+
+        self.gateway.forget_device(IEEE)
+
+        self.assertEqual({}, self.gateway._states)
+        self.assertEqual({}, self.gateway._expected)
+
+
 class MaintenanceOpsTests(GatewayTestCase):
     def test_ping_updates_liveness_info(self):
         self.uart.autoresponder = lambda m: [{
