@@ -16,12 +16,11 @@
 #     ieee alone -- the obvious way to write it -- adopting gang 1 makes gang 2
 #     disappear from the list, which is the same bug in a new place.
 #
-# Two sections of the task are NOT here, and both for the same reason: the Api
-# exposes exactly two zigbee ops, devices and permit_join. Neither addresses a
-# raw (ieee, endpoint), and a gang with no entity yet cannot be reached through
-# control.send, which takes an entity id. So the identify button and the
-# discard action each need an application-layer op, which is outside this
-# task's scope.
+# Identify and discard go through zigbee.identify and zigbee.discard. Neither
+# is a primitive this screen assembles: identify is one call that reads, flips,
+# holds and restores on the server side, because a screen change between two
+# dispatches would leave a real load switched on; discard is local-only and
+# never writes remove_device, which this firmware acks unconditionally.
 #
 # A three-gang switch arrives as endpoints [1,2,3] and gets three rows with no
 # new code here.
@@ -124,6 +123,31 @@ def _add(row):
                     on_err=lambda kind, msg: _toast("לא ניתן להוסיף"))
 
 
+def _identify(row):
+    """Flip this gang for a moment so the user can see which one it is."""
+    _toast("מהבהב…")
+    bridge.dispatch(store.api, "zigbee.identify",
+                    {"ieee": row["ieee"], "endpoint": row["endpoint"]},
+                    on_ok=_identified,
+                    on_err=lambda kind, msg: _toast("לא ניתן לזהות"))
+
+
+def _identified(result):
+    # The restore is the half that can hurt, so its failure is spoken rather
+    # than swallowed: the load is left inverted and only the user can see it.
+    if (result or {}).get("restored") is False:
+        _toast("הזיהוי בוצע אך המצב לא הוחזר — בדוק את המכשיר")
+
+
+def _discard(row):
+    """Take the row off the list. The device stays on the network."""
+    bridge.dispatch(store.api, "zigbee.discard", {"ieee": row["ieee"]},
+                    on_ok=lambda _r: _toast("הוסר מהרשימה"),
+                    on_err=lambda kind, msg: _toast(
+                        "המכשיר בשימוש — מחק אותו מהחדר"
+                        if kind == "conflict" else "לא ניתן להסיר"))
+
+
 def _toast(message):
     import toast
     toast.notify(message)
@@ -161,6 +185,16 @@ def _build():
                 if row["gangs"] > 1 else row["ieee"][-8:]
             w_label(card, theme.FONTS.body, theme.TEXT, label)
             card.add_event_cb(lambda e, r=row: _add(r), lv.EVENT.CLICKED, None)
+            buttons = w_group(column, lv.FLEX_FLOW.ROW)
+            buttons.set_width(lv.pct(100))
+            buttons.set_style_pad_column(8, lv.PART.MAIN)
+            for text, handler in (("זהה", _identify), ("הסר מהרשימה", _discard)):
+                button = w_card_button(buttons)
+                button.set_width(lv.pct(48))
+                button.set_height(theme.TAP_MIN)
+                w_label(button, theme.FONTS.body, theme.TEXT, text).center()
+                button.add_event_cb(lambda e, r=row, h=handler: h(r),
+                                    lv.EVENT.CLICKED, None)
 
     _effects.append(effect(_rebuild))
     return scr

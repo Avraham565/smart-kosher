@@ -22,6 +22,11 @@ from smart_kosher.adapters import (
 )
 from smart_kosher.adapters.memory_repository import MemoryEventJournal
 from smart_kosher.adapters.zigbee_gateway import ZigbeeGateway, ticks_ms
+from smart_kosher.application.api import (
+    BAD_REQUEST,
+    CONFLICT,
+    ApiError,
+)
 from smart_kosher.application.control_service import ControlService
 from smart_kosher.application.executor import Executor
 
@@ -1481,6 +1486,146 @@ class RegistryWriteCoalescingTests(GatewayTestCase):
         saves = self._count_saves()
         self.gateway.forget_device(IEEE)
         self.assertEqual(1, len(saves), "a removal was deferred")
+
+
+class DiscardAndIdentifyTests(GatewayTestCase):
+    """The two ops the add-device screen needs, and what each refuses to do."""
+
+    def _api(self):
+        from smart_kosher.application.api import Api
+        from smart_kosher.application.crud_service import CrudService
+        from smart_kosher.application.device_time import DeviceTimeService
+        from smart_kosher.application.views import ViewService
+
+        class _S:
+            load_error = None
+            def get(self):
+                return {}
+            def update(self, patch):
+                pass
+
+        executor = Executor(self.gateway, MemoryEventJournal())
+        return Api(CrudService(self.repo),
+                   ControlService(executor, self.repo), _S(),
+                   views=ViewService(self.repo),
+                   device_time=DeviceTimeService(None),
+                   zigbee=self.gateway)
+
+    # ── discard ───────────────────────────────────────────────────────────
+
+    def test_discard_sends_nothing_to_the_device(self):
+        # forget_device writes remove_device, which this firmware acks "ok"
+        # unconditionally with no callback (task 21). A discard button is a
+        # user flow and does not get to rest on that.
+        self.join_device()
+        before = self.written_ops()
+
+        result = self.gateway.discard_device(IEEE)
+
+        self.assertEqual({"discarded": True}, result)
+        self.assertNotIn(IEEE, self.gateway._registry)
+        self.assertEqual(before, self.written_ops())
+
+    def test_discard_drops_the_state_cells_too(self):
+        self.join_device()
+        self.uart.feed(report_event(True, endpoint=1))
+        self.gateway.discard_device(IEEE)
+        self.assertEqual({}, self.gateway._states)
+        self.assertEqual({}, self.gateway._reporting_retry)
+
+    def test_discard_refuses_a_device_an_entity_points_at(self):
+        # A row can be adopted between being drawn and being tapped. Discarding
+        # then would leave an entity whose radio the hub no longer knows.
+        self.join_device()
+        api = self._api()
+
+        with self.assertRaises(ApiError) as caught:
+            run(api.dispatch("zigbee.discard", {"ieee": IEEE}))
+
+        self.assertEqual(CONFLICT, caught.exception.kind)
+        self.assertIn(IEEE, self.gateway._registry)
+
+    def test_discard_of_an_unknown_device_is_not_an_error(self):
+        self.assertEqual({"discarded": False},
+                         self.gateway.discard_device("00:00:00:00:00:00:00:00"))
+
+    # ── identify ──────────────────────────────────────────────────────────
+
+    def _answering(self, on_off):
+        state = {"on_off": on_off}
+        def responder(m):
+            if m["op"] == "read_attr":
+                return [ack_for(m, {"on_off": state["on_off"],
+                                    "short_addr": SHORT})]
+            if m["op"] == "on_off":
+                state["on_off"] = m["payload"]["state"] == "on"
+            return [ack_for(m)]
+        self.uart.autoresponder = responder
+        return state
+
+    def test_identify_flips_the_gang_and_puts_it_back(self):
+        self.join_device()
+        state = self._answering(False)
+
+        result = run(self.gateway.identify(IEEE, 2, hold_ms=10))
+
+        self.assertEqual({"identified": True, "restored": True}, result)
+        self.assertFalse(state["on_off"], "the load was left inverted")
+        sent = [m["payload"]["state"] for m in self.uart.written
+                if m["op"] == "on_off"]
+        self.assertEqual(["on", "off"], sent)
+        self.assertTrue(all(m["payload"]["endpoint"] == 2
+                            for m in self.uart.written
+                            if m["op"] in ("on_off", "read_attr")))
+
+    def test_identify_restores_even_when_the_hold_is_interrupted(self):
+        # The half that matters. Anything that interrupts mid-pulse must still
+        # leave the lamp as it was found -- which is why the restore is in a
+        # finally on this side, and not two dispatches for a caller to pair up.
+        self.join_device()
+        state = self._answering(True)
+
+        async def boom(_seconds):
+            raise RuntimeError("screen went away")
+
+        with mock.patch.object(zigbee_gateway.asyncio, "sleep", boom):
+            with self.assertRaises(RuntimeError):
+                run(self.gateway.identify(IEEE, 1, hold_ms=10))
+
+        self.assertTrue(state["on_off"],
+                        "an interrupted identify left the load inverted")
+
+    def test_identify_says_so_when_it_cannot_restore(self):
+        self.join_device()
+        calls = {"n": 0}
+        def responder(m):
+            if m["op"] == "read_attr":
+                return [ack_for(m, {"on_off": False, "short_addr": SHORT})]
+            if m["op"] == "on_off":
+                calls["n"] += 1
+                if calls["n"] > 1:
+                    return None          # the restore never lands
+            return [ack_for(m)]
+        self.uart.autoresponder = responder
+
+        result = run(self.gateway.identify(IEEE, 1, hold_ms=10))
+
+        self.assertTrue(result["identified"])
+        self.assertFalse(result["restored"])
+
+    def test_identify_needs_a_state_it_can_restore(self):
+        self.join_device()
+        self.uart.autoresponder = lambda m: [ack_for(m, {"short_addr": SHORT})]
+        result = run(self.gateway.identify(IEEE, 1, hold_ms=10))
+        self.assertFalse(result["identified"])
+        self.assertNotIn("on_off", self.written_ops())
+
+    def test_identify_validates_its_endpoint(self):
+        self.join_device()
+        api = self._api()
+        with self.assertRaises(ApiError) as caught:
+            run(api.dispatch("zigbee.identify", {"ieee": IEEE, "endpoint": 0}))
+        self.assertEqual(BAD_REQUEST, caught.exception.kind)
 
 
 class PerGangStateTests(GatewayTestCase):

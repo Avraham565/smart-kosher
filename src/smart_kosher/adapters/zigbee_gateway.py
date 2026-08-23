@@ -1215,6 +1215,76 @@ class ZigbeeGateway(DeviceGateway):
             {"short_addr": entry["short_addr"],
              "endpoint": entry.get("endpoint", 1)})
 
+    def discard_device(self, ieee):
+        """Drop a device from *our* records. Send nothing.
+
+        Deliberately not forget_device, which writes remove_device on the wire
+        -- the one command in this firmware with no ACK ladder: it discards the
+        stack's return value, registers no callback, and acks "ok"
+        unconditionally (task 21). A pairing list's discard button is a user
+        flow, and a user flow does not get to rest on that.
+
+        So the device stays on the network. This hides it, and it will be back
+        on its next announce, which is why the button that calls this says
+        "removed from the list" rather than "removed".
+        """
+        existed = self._registry.pop(ieee, None) is not None
+        self._forget_device_state(ieee)
+        for store in (self._reporting_retry, self._reporting_inflight):
+            for key in list(store):
+                if key[0] == ieee:
+                    del store[key]
+        self._save_registry()
+        return {"discarded": existed}
+
+    async def identify(self, ieee, endpoint, hold_ms=1500):
+        """Flip one gang, hold, and put it back. The whole pulse, here.
+
+        Not a read op and a write op for a caller to assemble. The restore is
+        the half that matters -- it is switching a real load in someone's house
+        -- and split across two dispatches a screen change, a dropped frame or
+        a board that falls over between them leaves the lamp inverted with
+        nothing left to correct it. In a finally, on this side, that cannot
+        happen.
+
+        It is also the only way to address a gang that has no entity yet. That
+        is deliberately one behaviour and not a door: control.send takes an
+        entity id on purpose, and a raw on/off by (ieee, endpoint) would open
+        that permanently.
+        """
+        entry = self._registry.get(ieee)
+        if entry is None:
+            return {"identified": False, "error": "unknown device"}
+        short = entry["short_addr"]
+        read = await self._command(
+            "read_attr", {"short_addr": short, "endpoint": endpoint})
+        if read["status"] not in EXECUTION_SUCCESS_STATUSES:
+            return {"identified": False, "error": read.get("error", "read failed")}
+        reply = read.get("reply") or {}
+        if "on_off" not in reply:
+            return {"identified": False, "error": "no state to restore"}
+        was_on = bool(reply["on_off"])
+
+        async def switch(state):
+            return await self._command(
+                "on_off", {"state": state, "short_addr": short,
+                           "endpoint": endpoint})
+
+        flipped = await switch("off" if was_on else "on")
+        if flipped["status"] not in EXECUTION_SUCCESS_STATUSES:
+            return {"identified": False,
+                    "error": flipped.get("error", "could not switch")}
+        try:
+            await asyncio.sleep(hold_ms / 1000)
+        finally:
+            back = await switch("on" if was_on else "off")
+        if back["status"] not in EXECUTION_SUCCESS_STATUSES:
+            # Say so rather than go quiet: the load is left inverted and only
+            # the user can see that.
+            return {"identified": True, "restored": False,
+                    "error": back.get("error", "could not restore")}
+        return {"identified": True, "restored": True}
+
     def forget_device(self, ieee):
         entry = self._registry.pop(ieee, None)
         self._forget_device_state(ieee)

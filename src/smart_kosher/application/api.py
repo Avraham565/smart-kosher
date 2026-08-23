@@ -195,6 +195,8 @@ class Api:
             # wired (the simulator has nothing to pair).
             ops["zigbee.devices"] = self._zigbee_devices
             ops["zigbee.permit_join"] = self._zigbee_permit_join
+            ops["zigbee.discard"] = self._zigbee_discard
+            ops["zigbee.identify"] = self._zigbee_identify
         self._ops = ops
 
     def ops(self):
@@ -346,6 +348,41 @@ class Api:
         if not _is_int(duration) or not 1 <= duration <= 254:
             raise ApiError(BAD_REQUEST, "duration must be an integer in 1..254")
         return self._zigbee.permit_join(duration)
+
+    def _zigbee_discard(self, params):
+        """Take a device off the pairing list without touching the network.
+
+        Refused when any entity still points at it. _release_radio_device makes
+        the same check on the delete path, and this needs its own rather than
+        borrowing it: a device can be adopted between the row being drawn and
+        the button being pressed, and discarding it then would leave an entity
+        whose radio the hub no longer knows.
+        """
+        ieee = params.get("ieee")
+        if not isinstance(ieee, str) or not ieee:
+            raise ApiError(BAD_REQUEST, "ieee must be a non-empty string")
+        for entity in self._crud.list("endpoints"):
+            if entity.get("ieee_address") == ieee:
+                raise ApiError(
+                    CONFLICT,
+                    "device is in use by an endpoint; delete it there instead")
+        return self._zigbee.discard_device(ieee)
+
+    async def _zigbee_identify(self, params):
+        """Flip one gang and put it back, so the user can see which is which.
+
+        The whole pulse happens in the gateway, restore included. Split into a
+        read op and a write op for the UI to assemble, anything that interrupts
+        between them leaves a real load switched on in someone's house.
+        """
+        ieee = params.get("ieee")
+        endpoint = params.get("endpoint")
+        if not isinstance(ieee, str) or not ieee:
+            raise ApiError(BAD_REQUEST, "ieee must be a non-empty string")
+        if not _is_int(endpoint) or not 1 <= endpoint <= 254:
+            raise ApiError(BAD_REQUEST,
+                           "endpoint must be an integer in 1..254")
+        return await self._zigbee.identify(ieee, endpoint)
 
     # ── Settings ──────────────────────────────────────────────────────────────
 
