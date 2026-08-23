@@ -487,6 +487,7 @@ class ZigbeeGateway(DeviceGateway):
             self._registry[ieee] = entry
         entry["short_addr"] = short
         entry["endpoint"] = payload.get("endpoint", entry.get("endpoint", 1))
+        entry.pop("leave_failed", None)   # it is here, whatever happened before
         self._suspect.pop(ieee, None)  # fresh address — reachable again
         # The pairing itself goes to the flash now. Everything that enriches it
         # afterwards -- endpoints, clusters, reporting verdicts -- can wait for
@@ -1340,15 +1341,44 @@ class ZigbeeGateway(DeviceGateway):
                     "error": back.get("error", "could not restore")}
         return {"identified": True, "restored": True}
 
-    def forget_device(self, ieee):
-        entry = self._registry.pop(ieee, None)
-        self._forget_device_state(ieee)
-        self._save_registry()
+    async def forget_device(self, ieee):
+        """Ask the device to leave, and forget it only if it did.
+
+        Send, wait, then forget -- in that order, and it used to be the other
+        one. The record was dropped first and the leave went out through
+        _write_cmd afterwards, which creates no _pending entry, so the ack came
+        back under a request_id nobody was waiting on and was discarded. Both
+        halves of that were wrong: nothing ever read the verdict, and a leave
+        that failed left a device we had forgotten still sitting on the mesh.
+
+        Deleting the *entity* is a separate question and is never blocked on
+        this -- see _release_radio_device. A user removing a device that is
+        unplugged wants it gone from the panel, and a radio that cannot be
+        reached must not turn a successful delete into an error they see. So
+        the entity always goes; only the registry record is earned.
+
+        A device whose leave failed therefore stays in the registry with no
+        entity, and that is deliberately visible rather than tidy: it is really
+        still on the mesh and really unadopted, so it reappears on the
+        add-device list carrying leave_failed. Hiding it would move the
+        confusion rather than remove it, and leave a device on the network that
+        nothing in the UI mentions.
+        """
+        entry = self._registry.get(ieee)
         if entry is None:
             return {"removed": False}
-        self._write_cmd("remove_device",
-                        {"ieee_addr": ieee,
-                         "short_addr": entry.get("short_addr")})
+        result = await self._command(
+            "remove_device",
+            {"ieee_addr": ieee, "short_addr": entry.get("short_addr")})
+        if result["status"] not in EXECUTION_SUCCESS_STATUSES:
+            entry["leave_failed"] = result.get("error") or result["status"]
+            self._save_registry()
+            return {"removed": False,
+                    "error": entry["leave_failed"],
+                    "still_on_network": True}
+        self._registry.pop(ieee, None)
+        self._forget_device_state(ieee)
+        self._save_registry()
         return {"removed": True}
 
 

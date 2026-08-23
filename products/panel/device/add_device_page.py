@@ -107,7 +107,8 @@ def rows():
             if (ieee, endpoint) in claimed:
                 continue
             ready.append({"ieee": ieee, "endpoint": endpoint,
-                          "gangs": len(gangs)})
+                          "gangs": len(gangs),
+                          "leave_failed": entry.get("leave_failed")})
     return ready, pending
 
 

@@ -1077,6 +1077,7 @@ class DeviceRemovalTests(GatewayTestCase):
         # It used to delete only this hub's record: the device stayed joined,
         # kept its slot among the coordinator's children, and came back into
         # the registry the next time it announced itself.
+        self.uart.autoresponder = lambda m: [ack_for(m)]
         run(self.api.dispatch("endpoints.delete", {"id": "ep1"}))
         self.assertEqual(1, len(self.written_removals()))
         self.assertEqual(IEEE, self.written_removals()[0]["payload"]["ieee_addr"])
@@ -1484,8 +1485,87 @@ class RegistryWriteCoalescingTests(GatewayTestCase):
     def test_removing_a_device_is_written_at_once(self):
         self.join_device()
         saves = self._count_saves()
-        self.gateway.forget_device(IEEE)
+        self.uart.autoresponder = lambda m: [ack_for(m)]
+        run(self.gateway.forget_device(IEEE))
         self.assertEqual(1, len(saves), "a removal was deferred")
+
+
+class ForgetVerdictTests(GatewayTestCase):
+    """Send, wait, then forget -- and only if the device really left."""
+
+    def _api(self):
+        from smart_kosher.application.api import Api
+        from smart_kosher.application.crud_service import CrudService
+        from smart_kosher.application.device_time import DeviceTimeService
+        from smart_kosher.application.views import ViewService
+
+        class _S:
+            load_error = None
+            def get(self):
+                return {}
+            def update(self, patch):
+                pass
+
+        return Api(CrudService(self.repo),
+                   ControlService(Executor(self.gateway, MemoryEventJournal()),
+                                  self.repo),
+                   _S(), views=ViewService(self.repo),
+                   device_time=DeviceTimeService(None), zigbee=self.gateway)
+
+    def test_a_leave_that_fails_keeps_the_record(self):
+        # The record used to be dropped before the command even went out, so a
+        # failed leave left a device we had forgotten still on the mesh.
+        self.join_device()
+
+        out = run(self.gateway.forget_device(IEEE))     # nothing answers
+
+        self.assertFalse(out["removed"])
+        self.assertTrue(out["still_on_network"])
+        self.assertIn(IEEE, self.gateway._registry)
+        self.assertTrue(self.gateway.devices()[IEEE]["leave_failed"])
+
+    def test_a_leave_that_succeeds_forgets_it(self):
+        self.join_device()
+        self.uart.autoresponder = lambda m: [ack_for(m)]
+
+        out = run(self.gateway.forget_device(IEEE))
+
+        self.assertTrue(out["removed"])
+        self.assertNotIn(IEEE, self.gateway._registry)
+
+    def test_the_verdict_is_read_rather_than_assumed(self):
+        # _write_cmd made no _pending entry, so the ack came back under a
+        # request_id nobody awaited and was dropped. removed: True was a
+        # statement about nothing.
+        self.join_device()
+        self.uart.autoresponder = lambda m: [
+            {"version": 1, "type": "error", "request_id": m["request_id"],
+             "payload": {"code": "unknown_device"}}]
+
+        out = run(self.gateway.forget_device(IEEE))
+
+        self.assertFalse(out["removed"])
+        self.assertIn(IEEE, self.gateway._registry)
+
+    def test_deleting_the_entity_is_never_blocked_on_the_radio(self):
+        # A user removing an unplugged device wants it gone from the panel.
+        self.join_device()
+        api = self._api()
+
+        run(api.dispatch("endpoints.delete", {"id": "ep1"}))   # no answer
+
+        self.assertEqual([], api.dispatch and self.repo.get_all("endpoints"))
+        self.assertIn(IEEE, self.gateway._registry,
+                      "the record was dropped without a verdict")
+
+    def test_a_device_that_comes_back_clears_the_mark(self):
+        self.join_device()
+        run(self.gateway.forget_device(IEEE))
+        self.assertTrue(self.gateway.devices()[IEEE]["leave_failed"])
+
+        self.join_device()          # it announced itself again
+
+        self.assertNotIn("leave_failed", self.gateway.devices()[IEEE])
 
 
 class DiscardAndIdentifyTests(GatewayTestCase):
@@ -1800,7 +1880,8 @@ class PerGangStateTests(GatewayTestCase):
         self.uart.feed(report_event(True, endpoint=1))
         self.uart.feed(report_event(True, endpoint=2))
 
-        self.gateway.forget_device(IEEE)
+        self.uart.autoresponder = lambda m: [ack_for(m)]
+        run(self.gateway.forget_device(IEEE))
 
         self.assertEqual({}, self.gateway._states)
         self.assertEqual({}, self.gateway._expected)
@@ -1831,7 +1912,8 @@ class MaintenanceOpsTests(GatewayTestCase):
 
     def test_forget_device_clears_registry_and_notifies_coordinator(self):
         self.join_device()
-        out = self.gateway.forget_device(IEEE)
+        self.uart.autoresponder = lambda m: [ack_for(m)]
+        out = run(self.gateway.forget_device(IEEE))
         self.assertTrue(out["removed"])
         self.assertNotIn(IEEE, self.gateway.devices())
         cmd = self.uart.written[-1]

@@ -153,6 +153,8 @@ async def _devices_refresh(api):
                     "endpoints": entry.get("endpoints"),
                     "clusters": entry.get("clusters"),
                     "endpoint_on_off": entry.get("endpoint_on_off"),
+                    # Why a device the user just deleted is on the add list.
+                    "leave_failed": entry.get("leave_failed"),
                 }
             store.devices.set(devices)
             endpoints = await api.dispatch("endpoints.list")

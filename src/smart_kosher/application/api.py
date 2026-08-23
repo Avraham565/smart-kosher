@@ -249,12 +249,15 @@ class Api:
             return self._crud.update(
                 entity, _require_id(params), _require_dict(params, "data"))
 
-        def delete(params):
+        async def delete(params):
             entity_id = _require_id(params)
             ieee = self._radio_identity(entity, entity_id)
+            # The entity goes first and unconditionally. Whether the radio can
+            # be told is a separate question, and a device that is unplugged
+            # must not keep its row on the screen.
             self._crud.delete(entity, entity_id)
             if ieee is not None:
-                self._release_radio_device(ieee)
+                await self._release_radio_device(ieee)
             return None
 
         ops[entity + ".list"] = list_
@@ -273,7 +276,7 @@ class Api:
         except Exception:
             return None
 
-    def _release_radio_device(self, ieee):
+    async def _release_radio_device(self, ieee):
         """Tell the coordinator to drop a device once nothing refers to it.
 
         Deleting an endpoint used to remove only this hub's record of it: the
@@ -290,7 +293,7 @@ class Api:
             if entity.get("ieee_address") == ieee:
                 return          # another endpoint still uses this device
         try:
-            self._zigbee.forget_device(ieee)
+            await self._zigbee.forget_device(ieee)
         except Exception as exc:
             # The entity is already gone; a radio that cannot be reached must
             # not turn a successful delete into an error the user sees.
