@@ -962,6 +962,10 @@ class RegistryDurabilityTests(GatewayTestCase):
         gateway = self._gateway(self.uart)
         self.uart.deliver = gateway.process_line
         self.uart.feed(joined_event())
+        # A first join writes immediately; a rejoin is coalesced, and these
+        # tests want the write itself. Production reaches it a beat later from
+        # process_line or pump_reporting -- this is the same write, on demand.
+        gateway.flush_registry(force=True)
         return gateway
 
     def _write(self, suffix, text):
@@ -1411,6 +1415,72 @@ class ReportingEveryGangTests(GatewayTestCase):
         self.assertTrue(self.gateway.devices()[IEEE]["reporting"])
         self.assertEqual([1, 2],
                          self.gateway.devices()[IEEE]["reporting_endpoints"])
+
+
+class RegistryWriteCoalescingTests(GatewayTestCase):
+    """A join is a burst; it must not be a burst of flash writes.
+
+    Measured on the board: one _save_registry is 270-380ms of blocking flash.
+    A two-gang join touches the registry six times -- joined, endpoints,
+    clusters per endpoint, a reporting verdict per endpoint -- which is over
+    two seconds inside the writer, on the one cooperative loop, at the exact
+    moment the device is sending the most frames. The RX buffer holds seven or
+    eight of them.
+    """
+
+    def _count_saves(self):
+        saves = []
+        real = self.gateway._save_registry
+        def spy():
+            saves.append(1)
+            return real()
+        self.gateway._save_registry = spy
+        return saves
+
+    def _join_burst(self):
+        self.join_device()
+        self.uart.feed({"version": 1, "type": "event", "op": "device_endpoints",
+                        "payload": {"short_addr": SHORT, "endpoints": [1, 2]}})
+        for endpoint in (1, 2):
+            self.uart.feed({"version": 1, "type": "event",
+                            "op": "device_clusters",
+                            "payload": {"short_addr": SHORT,
+                                        "endpoint": endpoint,
+                                        "in_clusters": [0, 3, 6]}})
+            self.uart.feed({"version": 1, "type": "event",
+                            "op": "reporting_configured",
+                            "payload": {"short_addr": SHORT,
+                                        "endpoint": endpoint,
+                                        "cluster": 6, "status": "ok"}})
+
+    def test_a_two_gang_join_does_not_write_six_times(self):
+        saves = self._count_saves()
+        self._join_burst()
+        self.gateway.flush_registry(force=True)
+        self.assertLessEqual(len(saves), 2,
+                             "the join burst wrote {} times".format(len(saves)))
+
+    def test_the_pairing_itself_is_never_deferred(self):
+        # Everything after the join can wait; "this device belongs here"
+        # cannot. Lose it to a power cut and the device is a stranger on the
+        # next boot.
+        saves = self._count_saves()
+        self.join_device()
+        self.assertEqual(1, len(saves),
+                         "a first join did not reach the flash immediately")
+
+    def test_a_pending_change_is_written_by_the_next_frame(self):
+        self._join_burst()
+        saves = self._count_saves()
+        self.gateway._registry_due = ticks_ms() - 1     # window has passed
+        self.uart.feed(report_event(True, endpoint=1))
+        self.assertEqual(1, len(saves), "a pending write was never flushed")
+
+    def test_removing_a_device_is_written_at_once(self):
+        self.join_device()
+        saves = self._count_saves()
+        self.gateway.forget_device(IEEE)
+        self.assertEqual(1, len(saves), "a removal was deferred")
 
 
 class PerGangStateTests(GatewayTestCase):

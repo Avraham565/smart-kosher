@@ -73,6 +73,19 @@ _WATCHDOG_DOWN_MS = 2000        # re-probe interval while link is down
 # than the ping it guards (_DEFAULT_ACK_TIMEOUT_MS), so it can never
 # expire under a probe that is still legitimately running.
 _PROBE_INFLIGHT_MS = 8000
+# A join is a burst: device_joined, then device_endpoints, then device_clusters
+# per endpoint, then a reporting verdict per endpoint. Each used to write the
+# registry, and a write is 270-380ms of blocking flash on this board (measured)
+# -- so pairing a two-gang switch spent over two seconds inside _save_registry,
+# on the single cooperative loop, at the exact moment the device is sending the
+# most frames. The RX buffer holds seven or eight of them.
+#
+# Coalesced from the *first* touch rather than debounced, so the wait is
+# bounded: a burst costs one write, and nothing can defer a write for longer
+# than this no matter how long the burst runs. That bound is the durability
+# trade -- the registry is the only record that a device belongs to this house,
+# so losing a second of it to a power cut is the most this may ever risk.
+_REGISTRY_COALESCE_MS = 1000
 
 # Enabling reporting is bind + configure_reporting *on the device*, and either
 # half can fail after the command itself was accepted -- the outcome only
@@ -154,6 +167,9 @@ class ZigbeeGateway(DeviceGateway):
         self._suspect = {}
         # ieee -> {"attempts": int, "due": ticks, "error": str} while the
         # coordinator has not confirmed reporting for the device.
+        # None when clean; otherwise the tick by which the registry must reach
+        # the flash. See _REGISTRY_COALESCE_MS.
+        self._registry_due = None
         self._reporting_retry = {}
         # ieee -> credit expiry, for requests sent and not yet answered.
         self._reporting_inflight = {}
@@ -183,6 +199,7 @@ class ZigbeeGateway(DeviceGateway):
         """
         if not self._registry_path:
             return {}
+        self._registry_due = None
         temporary = self._registry_path + ".tmp"
         backup = self._registry_path + ".bak"
         candidates = (self._registry_path, temporary, backup)
@@ -212,10 +229,28 @@ class ZigbeeGateway(DeviceGateway):
                   self.registry_load_error)
         return {}
 
+    def _touch_registry(self):
+        """The registry changed; get it to the flash soon, not now."""
+        if self._registry_due is None:
+            self._registry_due = ticks_add(ticks_ms(), _REGISTRY_COALESCE_MS)
+
+    def flush_registry(self, force=False):
+        """Write a pending registry change once its deadline has passed.
+
+        Driven from process_line and pump_reporting, both of which run on every
+        frame that could have dirtied it, so a burst settles a beat after it
+        ends rather than N times inside it.
+        """
+        if self._registry_due is None:
+            return
+        if force or ticks_diff(self._registry_due, ticks_ms()) <= 0:
+            self._save_registry()
+
     def _save_registry(self):
         """Write the registry through .tmp, keeping the previous copy as .bak."""
         if not self._registry_path:
             return
+        self._registry_due = None
         temporary = self._registry_path + ".tmp"
         backup = self._registry_path + ".bak"
         try:
@@ -341,6 +376,7 @@ class ZigbeeGateway(DeviceGateway):
         except ValueError:
             return False
 
+        self.flush_registry()
         # Any valid frame proves the link — reset the breaker.
         self._ping_timeouts = 0
         if self._down:
@@ -420,7 +456,15 @@ class ZigbeeGateway(DeviceGateway):
         entry["short_addr"] = short
         entry["endpoint"] = payload.get("endpoint", entry.get("endpoint", 1))
         self._suspect.pop(ieee, None)  # fresh address — reachable again
-        self._save_registry()
+        # The pairing itself goes to the flash now. Everything that enriches it
+        # afterwards -- endpoints, clusters, reporting verdicts -- can wait for
+        # the coalesce window, but "this device belongs to this house" is the
+        # one fact worth a blocking write: lose it to a power cut and the
+        # device is a stranger on the next boot.
+        if first_join:
+            self._save_registry()
+        else:
+            self._touch_registry()
         self._log("zigbee device", "joined:" if first_join else "rejoined:",
                   ieee, short)
         # Enqueue rather than send. A single pairing still goes out on the
@@ -530,7 +574,7 @@ class ZigbeeGateway(DeviceGateway):
             if endpoint not in confirmed:
                 confirmed.append(endpoint)
                 self._sync_reporting_flag(entry)
-                self._save_registry()
+                self._touch_registry()
         else:
             reason = payload.get("reason") or payload.get("status") or "error"
             state = self._reporting_retry.setdefault(key, {})
@@ -541,7 +585,7 @@ class ZigbeeGateway(DeviceGateway):
             if endpoint in confirmed:
                 confirmed.remove(endpoint)
                 self._sync_reporting_flag(entry)
-                self._save_registry()
+                self._touch_registry()
             self._log("zigbee reporting failed for", ieee, endpoint, reason)
         # Self-clocking: an answer frees a credit, so the next device goes out
         # now rather than waiting for a timer that knows nothing about how fast
@@ -567,6 +611,7 @@ class ZigbeeGateway(DeviceGateway):
         Safe to call from anywhere -- a join, an answer, or the heartbeat.
         """
         now = ticks_ms()
+        self.flush_registry()
 
         # Reclaim credits from requests that were never answered. Without this
         # a coordinator that swallows one request would leak a credit and the
@@ -614,7 +659,7 @@ class ZigbeeGateway(DeviceGateway):
         if not ieee or not isinstance(endpoints, list) or not endpoints:
             return
         self._registry[ieee]["endpoints"] = endpoints
-        self._save_registry()
+        self._touch_registry()
         self._log("zigbee endpoints for", ieee, endpoints)
 
     def _on_device_clusters(self, payload):
@@ -632,7 +677,7 @@ class ZigbeeGateway(DeviceGateway):
         entry = self._registry[ieee]
         found = entry.setdefault("clusters", {})
         found[str(payload.get("endpoint", 1))] = clusters
-        self._save_registry()
+        self._touch_registry()
         self._log("zigbee clusters for", ieee, payload.get("endpoint"),
                   clusters)
         # This is the moment a second gang becomes known: device_joined only
