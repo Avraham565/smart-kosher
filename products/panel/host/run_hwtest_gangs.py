@@ -11,6 +11,11 @@ wait on gang 1 answered ``observed: True`` while gang 1 was off, because gang 2
 had just reported -- and the proof that it is gone has to come from the same
 place.
 
+Reporting is change-driven, so the run primes the gangs into the opposite
+state before it measures. That is not defensive coding: without it the low gang
+was usually already off, the command produced no report, its cell stayed empty,
+and the whole run read as a failed assertion about code that was fine.
+
 It is a file rather than a snippet pasted per run because the same measurement
 is needed three times (26a, 26b, and the add-device screen), and a probe
 rewritten each time carries a new bug each time. That is not a guess: rewriting
@@ -122,9 +127,26 @@ async def go():
                 "on_off", {{"state": state, "short_addr": short,
                            "endpoint": endpoint}}))["status"]
 
-        # The measurement: the low gang off, the high gang on. Before 26a the
-        # second report overwrote the first and devices() answered True for a
-        # relay that is off.
+        # Prime into the opposite state first. Reporting is change-driven --
+        # measured on this rig: commanding a relay to the state it is already
+        # in produces no attribute_report at all. Without this the low gang
+        # was usually already off, never reported, and its cell stayed empty:
+        # the run then read as "the cell lied" when nothing had been measured.
+        await switch(low, "on")
+        await switch(high, "off")
+        await asyncio.sleep(3)
+        primed_low = (await gw._command(
+            "read_attr", {{"short_addr": short, "endpoint": low}}
+        )).get("reply", {{}}).get("on_off")
+        if primed_low is not True:
+            print("ERR|could not prime the low gang on (read back {{}})".format(
+                primed_low))
+            print("END")
+            return
+
+        # The measurement, and both commands are now guaranteed to be changes.
+        # Before 26a the second report overwrote the first and devices()
+        # answered True for a relay that is off.
         low_status = await switch(low, "off")
         high_status = await switch(high, "on")
         print("cmd_low|{{}}".format(low_status))
@@ -145,7 +167,8 @@ async def go():
     finally:
         try:
             await switch(high, "off")
-            print("restored|high gang off")
+            await switch(low, "off")
+            print("restored|both gangs off")
         except Exception as exc:
             print("ERR|could not restore the high gang: {{}}".format(exc))
         print("END")
