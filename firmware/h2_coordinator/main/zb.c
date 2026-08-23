@@ -225,6 +225,7 @@ static const char *kind_op(txn_kind_t kind)
     case TXN_KIND_BIND:           return "enable_reporting";
     case TXN_KIND_CONFIG_REPORT:  return "enable_reporting";
     case TXN_KIND_READ_REPORT_CFG: return "read_report_cfg";
+    case TXN_KIND_REMOVE:         return "remove_device";
     default:                      return "unknown";
     }
 }
@@ -810,6 +811,26 @@ static void on_read_report_cfg_rsp(ezb_zcl_cmd_read_report_config_rsp_message_t 
     send_ack(rid, "read_report_cfg", "delivered", p);
 }
 
+/* The device's own verdict on a leave request.
+ *
+ * Reached through the handle in user_ctx, never a global -- two removals in
+ * flight would otherwise answer for each other, which is the mistake
+ * bind_result_cb documents just above.
+ *
+ * result->error says whether the request got out; result->rsp->status is what
+ * the device said. Both have to be right, and neither used to be read: the old
+ * code discarded the return value, registered no callback, and acked "ok"
+ * before the radio had done anything at all. */
+static void leave_result_cb(const ezb_zdo_nwk_mgmt_leave_req_result_t *result,
+                            void *user_ctx)
+{
+    txn_handle_t handle = (txn_handle_t)(uintptr_t)user_ctx;
+    bool ok = result && result->error == EZB_ERR_NONE &&
+              result->rsp && result->rsp->status == EZB_ZDP_STATUS_SUCCESS;
+    uint8_t raw = (result && result->rsp) ? result->rsp->status : 0xFF;
+    finish_txn(handle, ok ? "delivered" : "failed", raw);
+}
+
 static void cmd_remove_device(const char *rid, cJSON *payload)
 {
     if (!payload) { send_error(rid, "missing_payload", NULL); return; }
@@ -824,14 +845,26 @@ static void cmd_remove_device(const char *rid, cJSON *payload)
     uint16_t target;
     if (!short_from_json(payload, &target)) { send_error(rid, "bad_addr", NULL); return; }
 
+    txn_handle_t handle = zb_txn_alloc(TXN_KIND_REMOVE, rid, target, 1,
+                                       REPORTING_TIMEOUT_MS);
+    if (handle == TXN_NONE) { send_error(rid, "busy", NULL); return; }
+
     ezb_zdo_nwk_mgmt_leave_req_t leave = {0};
     leave.dst_nwk_addr = target;
     memcpy(leave.field.device_addr.u8, ieee, 8);
-    ezb_zdo_nwk_mgmt_leave_req(&leave);
+    leave.cb       = leave_result_cb;
+    leave.user_ctx = (void *)(uintptr_t)handle;
 
-    cJSON *p = cJSON_CreateObject();
-    cJSON_AddStringToObject(p, "ieee_addr", ia->valuestring);
-    send_ack(rid, "remove_device", "ok", p);
+    /* The old firmware discarded this and acked "ok" regardless -- the same
+     * shape the comment on cmd_on_off calls out as the historical bug, still
+     * live here because remove_device never got the ack ladder. */
+    if (ezb_zdo_nwk_mgmt_leave_req(&leave) != EZB_ERR_NONE) {
+        zb_txn_release(handle);
+        send_error(rid, "send_failed", NULL);
+        return;
+    }
+    /* No ack yet on purpose: it comes from leave_result_cb (delivered/failed)
+     * or from the expiry sweep, exactly like every other addressed command. */
 }
 
 /* ── endpoint and cluster discovery ─────────────────────────────── */

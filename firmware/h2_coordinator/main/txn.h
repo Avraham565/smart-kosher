@@ -49,6 +49,7 @@ typedef enum {
     TXN_KIND_BIND,
     TXN_KIND_CONFIG_REPORT,
     TXN_KIND_READ_REPORT_CFG,
+    TXN_KIND_REMOVE,
 } txn_kind_t;
 
 typedef struct {

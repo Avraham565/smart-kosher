@@ -234,6 +234,46 @@ GANG2 on / waiting ep1 -> {'confirmed': False, 'observed': True} | reports: [(2,
 
 ---
 
+## 32 — `forget_device` יקשיב לפסק הדין, ויסדר את הסדר
+
+**חומרה: P2. אחרי 21, לא ממוזגת לתוכה.** 21 היא קושחה, 32 היא אדפטר — שני
+קבצים, שני קומיטים.
+
+**בהיקף:** `src/smart_kosher/adapters/zigbee_gateway.py` (`forget_device`).
+
+### הממצא
+
+```python
+def forget_device(self, ieee):
+    self._registry.pop(ieee, None)          ← שוכח קודם
+    self._save_registry()
+    self._write_cmd("remove_device", …)     ← fire-and-forget
+    return {"removed": True}                ← ללא תנאי
+```
+
+**שני פגמים, ושניהם שורדים את 21:**
+
+1. **אף אחד לא מקשיב.** `_write_cmd` אינו יוצר רשומה ב-`_pending`, ולכן ה-ack
+   חוזר עם `request_id` שאיש לא ממתין לו **ונזרק בשקט**. גם אחרי ש-21 תלמד
+   את הקושחה להחזיר `delivered`/`failed` אמיתי, הפסק דין לא מגיע לאיש. אותה
+   צורה בדיוק שנמצאה ב-`_request_reporting`.
+2. **הסדר הפוך.** הרשומה נמחקת **לפני** השליחה, אז `leave` שנכשל משאיר מכשיר
+   ששכחנו — והוא עדיין על הרשת.
+
+### מה לעשות
+
+`await self._command("remove_device", …)`, ורק בהצלחה למחוק. **שלח, המתן, ואז
+שכח.** שים לב ש-`forget_device` סינכרונית היום ויש לה קוראים
+(`_release_radio_device` ב-`api.py`, ו-`discard_device` **אינה** נוגעת בזה —
+היא מקומית בכוונה).
+
+### הוכחה
+
+* **M1:** החזר את הסדר → `leave` שנכשל משאיר רישום מחוק ומכשיר על הרשת.
+* **M2:** החזר ל-`_write_cmd` → הפסק דין נזרק ו-`removed: True` חוזר תמיד.
+
+---
+
 ## 28 — זיהוי בנורית (שיפור נוחות, **לא חוסם**)
 
 > **עודכן:** `zigbee.identify` נבנה במשימה 30 ומזהה **בהפעלת הממסר עצמו** —
