@@ -241,16 +241,21 @@ async def test_manual_signal(h, r, actuator, dut):
 
 async def test_observed_state_integrity(h, r, dut):
     print("\n[5] we never mistake our own command for the device's word")
-    h.gw._states.pop(dut, None)
-    h.gw._expected.pop(dut, None)
+    # Keyed by (ieee, endpoint) since the per-gang split: popping by ieee
+    # alone silently did nothing here, which left this phase reading state
+    # phase 4 had put there -- and turned the assertion below into one that
+    # could not fail, because a bare ieee is never a key in a tuple-keyed dict.
+    endpoint = (h.endpoint_of(dut) or {}).get("zigbee_endpoint", 1)
+    h.gw._forget_device_state(dut)
     current = await h.read_true_state(dut)
-    h.gw._states.pop(dut, None)          # forget what the read told us
+    h.gw._forget_device_state(dut)       # forget what the read told us
 
     await h.command(dut, "off" if current else "on", "hw-integrity")
-    r.check(dut not in h.gw._states,
+    r.check(not any(key[0] == dut for key in h.gw._states),
             "an unconfirmed command does not become observed state")
     confirmation = await h.gw.wait_for_report(dut, not current,
-                                              REPORT_BUDGET_MS)
+                                              REPORT_BUDGET_MS,
+                                              endpoint=endpoint)
     r.check(confirmation["confirmed"],
             "the device's own report confirms it", str(confirmation))
 
