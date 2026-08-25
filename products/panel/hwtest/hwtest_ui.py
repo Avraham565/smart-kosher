@@ -860,6 +860,43 @@ def test_optimistic_write_touches_one_gang():
     store.devices.set({})
 
 
+def test_add_device_page_stays_on_the_glass(home):
+    """The add screen was never in this list, and three layout tasks follow.
+
+    Its rows carry three buttons now, and 38 may swap the typographic
+    characters for wider Hebrew words while 41 changes row heights -- all on
+    this page. Three layout changes in a row verified by looking is how a
+    silent overflow ships: the panel has no scrollbars, so anything past the
+    edge is simply lost and nothing complains.
+    """
+    import add_device_page
+    import store
+    IEEE = "70:d0:7e:ff:fe:6e:c6:40"
+    ACT = "78:1c:9d:ff:fe:12:76:fa"
+
+    # A two-gang device (two rows), a single-gang one, one still being
+    # identified, and one carrying the failed-removal label -- the longest
+    # text this page can put on a row.
+    store.endpoints.set([])
+    store.devices.set({
+        IEEE: {"endpoints": [1, 2], "clusters": {"1": [0, 3, 6], "2": [0, 3, 6]},
+               "leave_failed": "no_response"},
+        ACT: {"endpoints": [1, 242], "clusters": {"1": [0, 3, 6], "242": []}},
+        "b0:e8:e8:ff:fe:66:82:bd": {"endpoints": None, "clusters": None},
+    })
+    screen = add_device_page._build()
+    lv.screen_load(screen)
+    screen.update_layout()
+    escaped = _escapes(screen)
+    _check("overflow: add-device page stays on screen", not escaped,
+           str(escaped[:3]))
+
+    lv.screen_load(home)
+    screen.delete()
+    store.devices.set({})
+    store.endpoints.set([])
+
+
 # ── pairing window ───────────────────────────────────────────────────────────
 
 def test_pairing_state_expires_with_the_window():
@@ -897,6 +934,7 @@ def run():
     test_add_device_rows()
     test_device_state_is_per_gang()
     test_optimistic_write_touches_one_gang()
+    test_add_device_page_stays_on_the_glass(home)
     test_pairing_state_expires_with_the_window()
 
     failed = [name for name, ok, _ in _results if not ok]

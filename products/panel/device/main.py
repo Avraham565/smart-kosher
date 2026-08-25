@@ -168,9 +168,15 @@ async def _devices_refresh(api):
             # and nothing replaced the clear, so "searching for a device" stayed
             # on screen for good, and went on claiming it over a window the
             # coordinator had already shut.
-            store.apply_pairing_window(
-                (await api.dispatch("status.get")).get(
-                    "permit_join_seconds", 0))
+            # Only while a window could be open. This poll runs every few
+            # seconds for the whole life of the panel, and the join window is
+            # relevant for 180 of them, occasionally -- asking always would be
+            # a sixth dispatch per tick to learn nothing
+            # (docs/panel-update-model.md analyses this loop).
+            if store.pairing.get() is not None:
+                store.apply_pairing_window(
+                    (await api.dispatch("status.get")).get(
+                        "permit_join_seconds", 0))
         except Exception as exc:
             print("devices refresh error:", exc)
         await asyncio.sleep(_DEVICES_PERIOD_S)
