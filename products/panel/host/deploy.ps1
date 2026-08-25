@@ -93,17 +93,44 @@ try {
     Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 }
 
-Write-Host "== 3c) remove modules that moved out of the board root =="
-# A board flashed before 2026-08-05 has /scheduler.py at the root. It now lives
-# in the brain package (/lib/smart_kosher/application/) and main.py imports it
-# from there, so the root copy is dead -- but nothing deletes it: clean_board
-# only removes main.py, and a copy never removes what it does not overwrite. A
-# stale module that still imports and still runs is exactly what wastes an hour
-# at 3am.
-foreach ($stale in @("scheduler.py")) {
-    try { Mpr rm (":" + $stale); Write-Host "   removed stale ->" $stale }
-    catch { }   # not there: the normal case on a clean board
+Write-Host "== 3c) remove orphaned modules from the board root =="
+# A copy never removes what it does not overwrite, so a module deleted from the
+# repo lives on the flash forever -- still importable, which is how "we fixed
+# that" becomes "we fixed that in the other file". This step used to be a
+# hand-written list holding exactly one name (scheduler.py, added when it moved
+# in August 2026). house_page.py was deleted from git on 2026-08-02, was never
+# added to the list, and was still on the board at its pre-deletion 5308 bytes
+# three weeks later. A list that has to be remembered is a list that ages.
+#
+# So the orphans are derived: any .py at the board root that is not one of ours.
+# What counts as ours is the part worth reading, because getting it wrong here
+# deletes something the board needs:
+#
+#   device/*.py   the product itself
+#   hwtest/*.py   the suites the runners upload -- deriving against device/
+#                 alone would delete the test suite on every deploy
+#   boot.py       MicroPython's own stub, present on a fresh flash and not ours
+#
+# Only .py is considered, which is what keeps the fonts (*.bin) and the lib/
+# and data/ directories out of it without naming them.
+$keep = @{}
+Get-ChildItem (Join-Path $device "*.py") | ForEach-Object { $keep[$_.Name] = $true }
+Get-ChildItem (Join-Path $here "..\hwtest\*.py") | ForEach-Object { $keep[$_.Name] = $true }
+$keep["boot.py"] = $true
+
+$listing = Mpr fs ls :
+$orphans = 0
+foreach ($line in $listing) {
+    $parts = ($line -replace "\s+", " ").Trim().Split(" ")
+    if ($parts.Length -ne 2) { continue }
+    $name = $parts[1]
+    if (-not $name.EndsWith(".py")) { continue }
+    if ($keep.ContainsKey($name)) { continue }
+    Write-Host "   orphan ->" $name
+    Mpr rm (":" + $name)
+    $orphans++
 }
+if ($orphans -eq 0) { Write-Host "   none" }
 
 Write-Host "== 4) main.py last, then reset =="
 Mpr cp (Join-Path $device "main.py") ":main.py"
