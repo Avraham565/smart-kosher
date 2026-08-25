@@ -953,6 +953,18 @@ def test_font_glyph_coverage():
         _check("font: control glyph {} present".format(name),
                all(ask(font, cp) for _n, font in fonts))
 
+    # The scan below ignores everything under 0x7F, because outside comments
+    # the ASCII in a source file is mostly syntax rather than text. That makes
+    # it blind to exactly the characters this fix chose as replacements -- the
+    # dots became "|", the chevrons became ">" and "<". Measured once and
+    # present in all five fonts, but a font rebuild is its own open task, and
+    # the day it drops one of these the boxes come back with the scan silent.
+    substitutes = "|><+/."
+    absent = [c for c in substitutes
+              if not all(ask(font, ord(c)) for _n, font in fonts)]
+    _check("font: the ASCII the fix substituted in is present",
+           not absent, "missing: {}".format("".join(absent)))
+
     missing = []
     drawn, reached = _drawn_codepoints()
     # The scan is only worth reading if it saw the product. Its first version
