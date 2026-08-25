@@ -6,9 +6,10 @@
 # delete main.py and reset to a clean board (no UI, no DMA), copy everything,
 # then drop main.py in last and reset.
 #
-# Usage:  .\deploy.ps1 -Port COM8
+# Usage:  .\deploy.ps1            (finds the panel)
+#         .\deploy.ps1 -Port COM8  (override)
 param(
-    [Parameter(Mandatory = $true)][string]$Port
+    [string]$Port
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +18,24 @@ $device   = Join-Path $here "..\device"
 # host/ -> panel/ -> products/ -> repo root.
 $repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $here))
 $pkgSrc   = Join-Path $repoRoot "src\smart_kosher"
+
+if (-not $Port) {
+    # find_panel() is the one place that knows the panel's USB id, and the
+    # three hwtest runners already call it. This script was the only one in the
+    # directory still demanding -Port, and the COM7<->COM8 jump it could not
+    # follow is what broke a deploy on 2026-08-24.
+    #
+    # It is asked rather than reimplemented: PowerShell cannot import Python,
+    # and a second copy of a VID/PID in another language is exactly how the two
+    # sides drift apart without either being wrong on its own.
+    $finder = "import sys; sys.path.insert(0, r'{0}'); from run_common import find_panel; print(find_panel() or '')" -f $here
+    $Port = (& python -c $finder | Out-String).Trim()
+    if (-not $Port) {
+        throw "No panel found (CH340 1A86:7522). Is its USB connected? Pass -Port to override."
+    }
+    Write-Host "panel on $Port"
+}
+
 $mpr      = "python", "-m", "mpremote", "connect", $Port
 
 function Mpr { & $mpr[0] $mpr[1..($mpr.Length - 1)] @args }
