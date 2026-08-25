@@ -8,6 +8,23 @@ import lvgl as lv
 
 import theme
 
+# The single place a dev_common STATE_* token becomes something visible. Both
+# the room list and the device page render it, and a dict copied into each
+# would be two vocabularies that agree until they do not -- the shape task 10
+# went to some trouble to remove.
+_STATE_LOOKS = {
+    "on":          ("דלוק", "SUCCESS"),
+    "off":         ("כבוי", "MUTED"),
+    "unknown":     ("—", "FAINT"),
+    "unreachable": ("לא זמין", "DANGER"),
+}
+
+
+def state_look(token):
+    """(text, colour) for a dev_common state token."""
+    text, colour = _STATE_LOOKS.get(token, _STATE_LOOKS["unknown"])
+    return text, getattr(theme, colour)
+
 
 def w_label(parent, font, color, text):
     """A text label with font, colour and text set in one call."""

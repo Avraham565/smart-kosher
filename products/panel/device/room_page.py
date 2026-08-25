@@ -29,7 +29,13 @@ import text_input
 import theme
 import toast
 from reactive import bind_text, effect
-from widgets import w_card_button, w_group, w_label, w_pager
+from widgets import (
+    state_look,
+    w_card_button,
+    w_group,
+    w_label,
+    w_pager,
+)
 
 # Pinned by hwtest_ui.test_lists_never_overflow_the_glass.
 DEVICES_PER_PAGE = 3
@@ -149,13 +155,13 @@ def _device_row(parent, endpoint):
 
     toggle = w_card_button(row)
     toggle.set_size(120, 64)
-    toggle.add_event_cb(lambda e: dev_common.device_toggle(endpoint),
+    toggle.add_event_cb(lambda e: dev_common.device_toggle(endpoint, toast.notify),
                         lv.EVENT.CLICKED, None)
     state = w_label(toggle, theme.FONTS.body, theme.MUTED, "—")
     state.center()
 
     def _apply():
-        text, color = dev_common.device_state(endpoint)
+        text, color = state_look(dev_common.device_state(endpoint))
         state.set_text(text)
         state.set_style_text_color(color, lv.PART.MAIN)
 

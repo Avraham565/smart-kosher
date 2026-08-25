@@ -13,7 +13,7 @@ import theme
 import toast
 import zone_picker
 from reactive import effect
-from widgets import w_card_button, w_group, w_label
+from widgets import state_look, w_card_button, w_group, w_label
 
 _screen = None
 _current = {}
@@ -29,7 +29,7 @@ def _back():
 
 
 def _toggle(e):
-    dev_common.device_toggle(_endpoint())
+    dev_common.device_toggle(_endpoint(), toast.notify)
 
 
 def _rename(e):
@@ -141,7 +141,7 @@ def _build():
     state.center()
 
     def _apply():
-        text, color = dev_common.device_state(_endpoint())
+        text, color = state_look(dev_common.device_state(_endpoint()))
         state.set_text(text)
         state.set_style_text_color(color, lv.PART.MAIN)
 

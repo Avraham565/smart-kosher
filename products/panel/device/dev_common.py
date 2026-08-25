@@ -7,8 +7,36 @@
 
 import bridge
 import store
-import theme
-import toast
+
+# ── the fourth vocabulary in this codebase, and the smallest ─────────────────
+#
+# What to show a person about ONE gang. That is all it is, and the three it
+# must not be mistaken for are all in src/:
+#
+#   ports/device_gateway.py     how far a command travelled on the wire
+#                               (accepted_by_h2 ... observed_state)
+#   EXECUTION_SUCCESS_STATUSES  which of those count as delivered
+#   application/executor.py     what the brain concluded about an event
+#                               (executed / ack_unjournaled / failed)
+#
+# None of those answer "what does this row say". A command can be delivered and
+# journalled and the row still read UNKNOWN, because the gang has not reported
+# since boot -- delivery is a fact about the wire, this is what we can honestly
+# claim on screen. Do not merge them and do not map one onto another: they have
+# different cardinalities and different reasons to change.
+#
+# Tokens rather than (text, colour) so this module carries no LVGL and can be
+# tested on CPython -- which is exactly what let the per-gang bug live here
+# unnoticed. widgets.state_look is the one place a token becomes visible.
+STATE_ON = "on"
+STATE_OFF = "off"
+STATE_UNKNOWN = "unknown"
+STATE_UNREACHABLE = "unreachable"
+
+
+def _say(notify, message):
+    if notify is not None:
+        notify(message)
 
 # Which fields belong to the radio and which to one relay on it. Stated here
 # because the two live in the same dict and the difference is invisible at the
@@ -55,22 +83,25 @@ def _gang_state(entity):
 
 
 def device_state(entity):
-    """(text, color) for one endpoint entity's live state."""
+    """One of the STATE_* tokens for this endpoint entity."""
     ieee = entity.get("ieee_address") if entity else None
     device = store.devices.get().get(ieee) if ieee else None
     if device is None:
-        return "—", theme.FAINT
+        return STATE_UNKNOWN
     # Device-wide: true of the radio, so every gang on it shows it.
     if device.get("unreachable"):
-        return "לא זמין", theme.DANGER
+        return STATE_UNREACHABLE
     on = _gang_state(entity)
     if on is None:
-        return "—", theme.FAINT
-    return ("דלוק", theme.SUCCESS) if on else ("כבוי", theme.MUTED)
+        return STATE_UNKNOWN
+    return STATE_ON if on else STATE_OFF
 
 
-def device_toggle(entity):
-    """Flip a device: optimistic store update (instant UI) + control.send.
+def device_toggle(entity, notify=None):
+    """Flip one gang: optimistic store update (instant UI) + control.send.
+
+    ``notify`` is how a withdrawal reaches the user -- passed in rather than
+    imported so this module stays free of LVGL. The panel hands it toast.notify.
 
     The optimistic write stays, unlike the other write paths on this panel: a
     radio command takes real time, and a switch that does not light up until
@@ -107,7 +138,7 @@ def device_toggle(entity):
         latest = dict(store.devices.get())
         held = latest.get(ieee)
         if held is None:
-            toast.notify(message)
+            _say(notify, message)
             return
         per_gang_now = dict(held.get("endpoint_on_off") or {})
         # Same compare-and-swap, on this gang's cell. The logic is unchanged
@@ -121,7 +152,7 @@ def device_toggle(entity):
             restored["endpoint_on_off"] = per_gang_now
             latest[ieee] = restored
             store.devices.set(latest)
-        toast.notify(message)
+        _say(notify, message)
 
     def ok(result):
         # A dispatch that succeeded is not a command that worked. The executor
