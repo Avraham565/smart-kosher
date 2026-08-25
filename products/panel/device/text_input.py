@@ -20,9 +20,9 @@ _field = None
 
 
 def _refresh():
-    buf = _state["buf"]
-    _field.set_text(buf if buf else _state["placeholder"])
-    _field.set_style_text_color(theme.TEXT if buf else theme.FAINT, lv.PART.MAIN)
+    # The placeholder is the textarea's own, so an empty buffer is empty text
+    # rather than grey text that the cursor would sit at the end of.
+    _field.set_text(_state["buf"])
 
 
 def _on_letter(ch):
@@ -82,13 +82,34 @@ def _build():
     body.set_flex_flow(lv.FLEX_FLOW.COLUMN)
     body.set_style_pad_row(10, lv.PART.MAIN)
 
-    # text field
+    # Text field. A textarea rather than a label, because a label has no
+    # cursor and cannot be given one: there was no way to see where the next
+    # letter would land, or that the field was the thing being typed into.
+    #
+    # The objection to a textarea is that it scrolls, and the RGB panel forbids
+    # scrolling. Measured on the board rather than assumed: the SCROLLABLE flag
+    # is set by default and comes off, one-line height is 42 inside this 56px
+    # box, and eighty characters of Hebrew leave scroll_x at 0. What is left is
+    # the cursor, which LVGL blinks over the cursor's own area -- not the
+    # full-screen animation CLAUDE.md bans.
+    #
+    # The trade this accepts: with scrolling off, a name longer than the field
+    # is clipped rather than followed. Device and room names are short, and a
+    # clipped tail is a smaller failure than no cursor at all.
     field_box = w_card_button(body)
     field_box.set_width(lv.pct(100))
     field_box.set_height(56)
     field_box.remove_flag(lv.obj.FLAG.CLICKABLE)
-    _field = w_label(field_box, theme.FONTS.title, theme.TEXT, "")
+    _field = lv.textarea(field_box)
+    _field.set_one_line(True)
+    _field.remove_flag(lv.obj.FLAG.SCROLLABLE)
+    _field.set_width(lv.pct(100))
     _field.align(lv.ALIGN.RIGHT_MID, 0, 0)
+    _field.set_style_bg_opa(lv.OPA.TRANSP, lv.PART.MAIN)
+    _field.set_style_border_width(0, lv.PART.MAIN)
+    _field.set_style_text_font(theme.FONTS.title, lv.PART.MAIN)
+    _field.set_style_text_color(theme.TEXT, lv.PART.MAIN)
+    _field.set_style_text_align(lv.TEXT_ALIGN.RIGHT, lv.PART.MAIN)
 
     # spacer pushes the keyboard + actions to the bottom of the page
     spacer = lv.obj(body)
@@ -140,5 +161,6 @@ def open(title, initial, on_ok, placeholder="הקלד שם"):
     _state = {"buf": initial or "", "on_ok": on_ok, "return": return_screen,
               "placeholder": placeholder}
     _title.set_text(title)
+    _field.set_placeholder_text(placeholder)
     _refresh()
     lv.screen_load(_screen)

@@ -992,6 +992,41 @@ def test_font_glyph_coverage():
           "codepoints".format(len(reached), len(drawn)))
 
 
+def test_text_input_has_a_cursor(home):
+    """You must be able to see where the next letter lands.
+
+    The field was a label, and a label has no cursor and cannot be given one --
+    the gap was structural, not a missing style. So the check is structural
+    too: type three letters and ask the widget where its cursor is. A label
+    cannot answer that question at all.
+
+    The scrollable flag is checked in the same breath because it is what the
+    textarea costs: the panel has no scrollbars and the RGB driver forbids
+    scrolling, so a field that brought its own would be trading one defect for
+    a worse one.
+    """
+    import text_input
+
+    text_input.open("שם", "", lambda _t: None)
+    field = text_input._field
+
+    for letter in ("א", "ב", "ג"):
+        text_input._on_letter(letter)
+
+    where = None
+    try:
+        where = field.get_cursor_pos()
+    except Exception as exc:
+        where = "no cursor: {}".format(exc)
+    _check("cursor: it sits after the three letters typed", where == 3,
+           "cursor reports {}".format(where))
+
+    _check("cursor: the field brought no scrolling with it",
+           not field.has_flag(lv.obj.FLAG.SCROLLABLE))
+
+    lv.screen_load(home)
+
+
 def test_text_input_offers_digits_and_stays_on_the_glass(home):
     """The rename screen must be able to type the names we generate.
 
@@ -1095,6 +1130,7 @@ def run():
     test_add_device_rows()
     test_font_glyph_coverage()
     test_text_input_offers_digits_and_stays_on_the_glass(home)
+    test_text_input_has_a_cursor(home)
     test_add_device_page_stays_on_the_glass(home)
 
     failed = [name for name, ok, _ in _results if not ok]
