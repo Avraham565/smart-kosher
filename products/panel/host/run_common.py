@@ -158,6 +158,25 @@ def run_on_device(port, code, timeout, capture=False, hint=None):
         return None
 
 
+def _board_file_size(port, name):
+    """Bytes ``name`` occupies on the board, or None if it is not there.
+
+    The listing is the only thing that knows: mpremote reports a successful
+    copy from the host side, and the host side is not where the file landed.
+    """
+    result = mpremote(port, "fs", "ls", ":", capture=True)
+    if result is None or getattr(result, "returncode", 1) != 0:
+        return None
+    for line in (result.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == name:
+            try:
+                return int(parts[0])
+            except ValueError:
+                return None
+    return None
+
+
 def restore_main(port, device_dir):
     """Put main.py back on the panel. True if it will boot rendering again.
 
@@ -169,14 +188,30 @@ def restore_main(port, device_dir):
     Call it from a ``finally``. Everything between clean_board and here can
     fail, and the failures are the runs that most need the screen back.
     """
+    source = os.path.join(device_dir, "main.py")
+    want = os.path.getsize(source)
     print("== restoring main.py ==")
-    if mpremote(port, "cp", os.path.join(device_dir, "main.py"),
-                ":main.py") != 0:
-        print("!! could not restore main.py -- the panel will boot to the "
-              "REPL with a black screen. Re-run:")
-        print("   python -m mpremote connect {} cp "
-              "products/panel/device/main.py :main.py".format(port))
-        return False
-    mpremote(port, "reset")
-    print("screen is coming back")
-    return True
+
+    # Verified by size read back from the board, not by the copy's exit code.
+    # A board that is rebooting -- which is the state a crashed run leaves it
+    # in, and crashed runs are exactly when this matters -- has twice taken a
+    # copy and ended up with main.py at ZERO bytes. Zero bytes boots to a bare
+    # REPL and a black screen, and looks identical to no main.py at all, so
+    # every symptom of the failure is downstream and silent.
+    for attempt in (1, 2):
+        if mpremote(port, "cp", source, ":main.py") != 0:
+            print("!! copy of main.py failed (attempt {})".format(attempt))
+            continue
+        got = _board_file_size(port, "main.py")
+        if got == want:
+            mpremote(port, "reset")
+            print("screen is coming back")
+            return True
+        print("!! main.py is {} bytes on the board, expected {} "
+              "(attempt {})".format(got, want, attempt))
+
+    print("!! could not restore main.py -- the panel will boot to the "
+          "REPL with a black screen. Re-run:")
+    print("   python -m mpremote connect {} cp "
+          "products/panel/device/main.py :main.py".format(port))
+    return False
