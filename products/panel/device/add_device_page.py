@@ -192,15 +192,28 @@ def _build():
             label = "{}  ·  גאנג {}".format(row["ieee"][-8:], row["endpoint"]) \
                 if row["gangs"] > 1 else row["ieee"][-8:]
             w_label(card, theme.FONTS.body, theme.TEXT, label)
+            # The card stays tappable, but it is no longer the only way in.
+            # Adding was bound to the card alone while identify and discard had
+            # buttons of their own, so the primary action was the one action
+            # with nothing to press -- and it was not found.
             card.add_event_cb(lambda e, r=row: _add(r), lv.EVENT.CLICKED, None)
+
             buttons = w_group(column, lv.FLEX_FLOW.ROW)
             buttons.set_width(lv.pct(100))
             buttons.set_style_pad_column(8, lv.PART.MAIN)
-            for text, handler in (("זהה", _identify), ("הסר מהרשימה", _discard)):
+            # "חבר" first and in the primary colour, so which of the three is
+            # the thing to do is answered by looking rather than by guessing.
+            for text, handler, primary in (("חבר", _add, True),
+                                           ("זהה", _identify, False),
+                                           ("הסר מהרשימה", _discard, False)):
                 button = w_card_button(buttons)
-                button.set_width(lv.pct(48))
+                button.set_flex_grow(2 if primary else 1)
                 button.set_height(theme.TAP_MIN)
-                w_label(button, theme.FONTS.body, theme.TEXT, text).center()
+                if primary:
+                    button.set_style_bg_color(theme.PRIMARY, lv.PART.MAIN)
+                w_label(button, theme.FONTS.body,
+                        theme.SURFACE if primary else theme.TEXT,
+                        text).center()
                 button.add_event_cb(lambda e, r=row, h=handler: h(r),
                                     lv.EVENT.CLICKED, None)
 
