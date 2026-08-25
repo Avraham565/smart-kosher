@@ -72,10 +72,54 @@ export async function refreshZigbee() {
   return true;
 }
 
-// Live radio info for an endpoint entity, joined by its ieee address.
-export function radioOf(endpoint) {
-  if (!endpoint || !endpoint.ieee_address) return null;
-  return state.zigbee[endpoint.ieee_address] || null;
+// ── one gang's own state ───────────────────────────────────────────────
+//
+// The same four tokens the panel uses (products/panel/device/dev_common.py),
+// and deliberately the same rule, because the two read the same payload. The
+// import is blocked -- Python there, JavaScript here -- so
+// tests/test_gang_state_rule_is_in_sync.py pins them together.
+
+export const STATE_ON = 'on';
+export const STATE_OFF = 'off';
+export const STATE_UNKNOWN = 'unknown';
+export const STATE_UNREACHABLE = 'unreachable';
+
+const CLUSTER_ON_OFF = 6;
+
+// This entity's own on/off, or null. Never the device's, never a neighbour's.
+export function gangState(endpoint) {
+  const ieee = endpoint && endpoint.ieee_address;
+  if (!ieee) return null;
+  const device = state.zigbee[ieee];
+  if (!device) return null;
+  const ep = endpoint.zigbee_endpoint == null ? 1 : endpoint.zigbee_endpoint;
+  const perGang = device.endpoint_on_off || {};
+  // The panel's map has integer keys; the same map arrives here through JSON,
+  // where every key is a string. Both spellings are accepted rather than
+  // assumed, because guessing wrong reads as "this gang never reported".
+  for (const key of [String(ep), ep]) {
+    if (Object.prototype.hasOwnProperty.call(perGang, key)) return perGang[key];
+  }
+  // No entry for this gang. On a device known to have more than one, that is
+  // an answer of its own -- borrowing the device-level value hands gang 1
+  // whatever gang 2 last did. "I don't know" beats a neighbour's state.
+  const clusters = device.clusters || {};
+  const onoff = (device.endpoints || []).filter(
+    g => (clusters[String(g)] || []).includes(CLUSTER_ON_OFF));
+  if (onoff.length > 1) return null;
+  return typeof device.on_off === 'boolean' ? device.on_off : null;
+}
+
+// One of the STATE_* tokens for this endpoint entity.
+export function stateOf(endpoint) {
+  const ieee = endpoint && endpoint.ieee_address;
+  const device = ieee ? state.zigbee[ieee] : null;
+  if (!device) return STATE_UNKNOWN;
+  // Device-wide: true of the radio, so every gang on it shows it.
+  if (device.unreachable) return STATE_UNREACHABLE;
+  const on = gangState(endpoint);
+  if (on === null || on === undefined) return STATE_UNKNOWN;
+  return on ? STATE_ON : STATE_OFF;
 }
 
 // Schedules aimed at this endpoint, directly or through a group.

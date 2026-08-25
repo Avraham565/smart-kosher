@@ -5,8 +5,9 @@ import { api } from '../api.js';
 import { esc, registerActions, setMain } from '../dom.js';
 import { ACTION_LABELS, RECURRENCE_LABELS } from '../labels.js';
 import {
-  byId, ensureLoaded, radioOf, refreshZigbee, schedulesFor, state, upsert,
+  byId, ensureLoaded, refreshZigbee, schedulesFor, state, stateOf, upsert,
 } from '../store.js';
+import { stateLook } from './devices.js';
 import { showToast } from '../toast.js';
 
 export async function openDevicePage(id) {
@@ -24,13 +25,9 @@ export function renderDevicePage() {
     setMain('<div class="empty">המכשיר לא נמצא</div>');
     return;
   }
-  const radio = radioOf(ep);
-  const known = radio && typeof radio.on_off === 'boolean';
-  const powerCls = !radio ? 'unknown' : radio.unreachable ? 'unreachable'
-    : known ? (radio.on_off ? 'is-on' : 'is-off') : 'unknown';
-  const stateText = !radio ? 'מצב לא ידוע'
-    : radio.unreachable ? 'המכשיר לא מגיב'
-    : known ? (radio.on_off ? 'דולק' : 'כבוי') : 'מצב לא ידוע';
+  const look = stateLook(stateOf(ep));
+  const powerCls = look.cls;
+  const stateText = look.text;
 
   const zone = ep.zone_id ? byId('zones', ep.zone_id) : null;
   const schedules = schedulesFor(ep.id);
@@ -164,14 +161,10 @@ export async function refreshDeviceLive() {
   const btn = document.querySelector('.power-btn');
   const stateLine = document.querySelector('.power-state');
   if (!ep || !btn || !stateLine) return;
-  const radio = radioOf(ep);
-  const known = radio && typeof radio.on_off === 'boolean';
+  const look = stateLook(stateOf(ep));
   btn.classList.remove('is-on', 'is-off', 'unknown', 'unreachable');
-  btn.classList.add(!radio ? 'unknown' : radio.unreachable ? 'unreachable'
-    : known ? (radio.on_off ? 'is-on' : 'is-off') : 'unknown');
-  stateLine.textContent = !radio ? 'מצב לא ידוע'
-    : radio.unreachable ? 'המכשיר לא מגיב'
-    : known ? (radio.on_off ? 'דולק' : 'כבוי') : 'מצב לא ידוע';
+  btn.classList.add(look.cls);
+  stateLine.textContent = look.text;
 }
 
 async function powerFlip(el) {

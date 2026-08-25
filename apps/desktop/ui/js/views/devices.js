@@ -6,7 +6,8 @@ import { api } from '../api.js';
 import { esc, registerActions, setMain, val, withButtonBusy } from '../dom.js';
 import { closeModal, confirmAction, modalError, openModal } from '../modal.js';
 import {
-  byId, ensureLoaded, radioOf, refreshZigbee, remove, state, upsert,
+  byId, ensureLoaded, gangState, refreshZigbee, remove, state,
+  STATE_OFF, STATE_ON, STATE_UNREACHABLE, stateOf, upsert,
 } from '../store.js';
 import { showToast } from '../toast.js';
 import { openDevicePage } from './device.js';
@@ -35,17 +36,30 @@ export function renderDevices() {
 
 // ── live-state helpers ─────────────────────────────────────────────────
 
+// The one place a state token becomes something visible -- the client's
+// equivalent of the panel's widgets.state_look. This expression was written
+// out four times, and each copy read on_off off the device record.
+export function stateLook(token) {
+  if (token === STATE_ON) {
+    return { cls: 'is-on', text: 'דולק',
+             title: 'דולק — לחץ לכיבוי' };
+  }
+  if (token === STATE_OFF) {
+    return { cls: 'is-off', text: 'כבוי',
+             title: 'כבוי — לחץ להדלקה' };
+  }
+  if (token === STATE_UNREACHABLE) {
+    return { cls: 'unreachable', text: 'המכשיר לא מגיב',
+             title: 'המכשיר לא מגיב' };
+  }
+  return { cls: 'unknown', text: 'מצב לא ידוע',
+           title: 'מצב לא ידוע — לחץ להחלפה' };
+}
+
 export function stateButtonHtml(ep, { size = '' } = {}) {
-  const radio = radioOf(ep);
-  const known = radio && typeof radio.on_off === 'boolean';
-  const cls = !radio ? 'unknown' : radio.unreachable ? 'unreachable'
-    : known ? (radio.on_off ? 'is-on' : 'is-off') : 'unknown';
-  const title = !radio ? 'מצב לא ידוע'
-    : radio.unreachable ? 'המכשיר לא מגיב'
-    : known ? (radio.on_off ? 'דולק — לחץ לכיבוי' : 'כבוי — לחץ להדלקה')
-    : 'מצב לא ידוע — לחץ להחלפה';
-  return `<button class="state-btn ${cls} ${size}" data-action="flip-device"
-    data-id="${esc(ep.id)}" title="${title}" aria-label="${title}">⏻</button>`;
+  const look = stateLook(stateOf(ep));
+  return `<button class="state-btn ${look.cls} ${size}" data-action="flip-device"
+    data-id="${esc(ep.id)}" title="${look.title}" aria-label="${look.title}">⏻</button>`;
 }
 
 // Patch state buttons in place — no full re-render, so nothing the user
@@ -64,13 +78,16 @@ export function refreshStateButtons() {
   });
 }
 
-function liveCountText(endpointIds) {
+// Counted per gang. Read from the device record, the two entities of a
+// two-gang switch were the same radio, so known was 2 and on was 0 or 2 --
+// "1 on out of 2" could not be said at all, whatever the switch was doing.
+export function liveCountText(endpointIds) {
   let known = 0, on = 0;
   for (const id of endpointIds) {
-    const radio = radioOf(byId('endpoints', id));
-    if (radio && typeof radio.on_off === 'boolean') {
+    const value = gangState(byId('endpoints', id));
+    if (typeof value === 'boolean') {
       known++;
-      if (radio.on_off) on++;
+      if (value) on++;
     }
   }
   if (!known) return '';
@@ -82,9 +99,11 @@ function liveCountText(endpointIds) {
 export async function flipDevice(el) {
   const ep = byId('endpoints', el.dataset.id);
   if (!ep) return;
-  const radio = radioOf(ep);
-  const action = radio && typeof radio.on_off === 'boolean'
-    ? (radio.on_off ? 'off' : 'on')
+  // This gang's own state decides the explicit opposite. Taken from the
+  // device, tapping gang 1 aimed at whatever gang 2 last reported.
+  const current = gangState(ep);
+  const action = typeof current === 'boolean'
+    ? (current ? 'off' : 'on')
     : 'toggle';
   const done = withButtonBusy(el);
   try {
@@ -104,13 +123,12 @@ export async function flipDevice(el) {
 // ── endpoints list ─────────────────────────────────────────────────────
 
 function endpointRow(ep) {
-  const radio = radioOf(ep);
   const sub = [];
   if (ep.zone_id) {
     const zone = byId('zones', ep.zone_id);
     if (zone) sub.push(zone.name);
   }
-  if (radio && radio.unreachable) sub.push('לא מגיב');
+  if (stateOf(ep) === STATE_UNREACHABLE) sub.push('לא מגיב');
   return `
     <div class="card device-row" id="ep-${esc(ep.id)}">
       <div class="card-row">
