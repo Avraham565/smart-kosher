@@ -98,8 +98,9 @@ def _build():
     spacer.set_style_border_width(0, lv.PART.MAIN)
     spacer.remove_flag(lv.obj.FLAG.SCROLLABLE)
 
-    # letter keyboard
-    keyboard.build(body, keyboard.LAYOUT_HEBREW, _on_letter, key_height=46)
+    # letter keyboard, digits included -- see keyboard.LAYOUT_HEBREW_NUMERIC
+    keyboard.build(body, keyboard.LAYOUT_HEBREW_NUMERIC, _on_letter,
+                   key_height=46)
 
     # action row (RTL): backspace on the right edge, a wide space bar in the
     # centre, OK on the left.

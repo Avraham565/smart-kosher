@@ -35,6 +35,18 @@ LAYOUT_HEBREW = (
     ("ז", "ס", "ב", "ה", "נ", "מ", "צ", "ת", "ץ"),
 )
 
+# The same letters with a digit row on top, which is where a phone keyboard puts
+# it. Names are the reason: pairing itself produces "גאנג 2" and rooms are
+# named "סלון 1", and with letters alone neither could be typed -- the user
+# could read the name the panel invented but not correct it.
+#
+# A row rather than LAYOUT_NUMERIC's 3-column pad: the pad is a shape for a
+# screen that wants only digits (the clock), and stacking it under the letters
+# would cost four rows of height to say what one row says.
+LAYOUT_HEBREW_NUMERIC = (
+    ("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
+) + LAYOUT_HEBREW
+
 
 def _spacer(parent):
     s = lv.obj(parent)

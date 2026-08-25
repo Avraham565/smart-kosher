@@ -980,6 +980,50 @@ def test_font_glyph_coverage():
           "codepoints".format(len(reached), len(drawn)))
 
 
+def test_text_input_offers_digits_and_stays_on_the_glass(home):
+    """The rename screen must be able to type the names we generate.
+
+    This file's own header has claimed since it was written that the suite
+    proves "four result slots plus a 27-key Hebrew keyboard ... fits in 800x480"
+    -- and nothing in it ever built the keyboard. The claim was true of the city
+    picker's slots and imagined about the keyboard, which is how a fourth key
+    row could be added with no guard at all.
+
+    Two things are checked, and the second is the one that costs. Digits are
+    the fix; the height is what the fix risks, because the keyboard is the
+    tallest thing on the panel and a row is 46px on a 480px glass.
+    """
+    import text_input
+
+    text_input.open("שם", "", lambda _t: None)
+    screen = text_input._screen
+    screen.update_layout()
+
+    keys = []
+
+    def walk(obj):
+        for index in range(obj.get_child_count()):
+            child = obj.get_child(index)
+            try:
+                keys.append(child.get_text())
+            except Exception:
+                pass
+            walk(child)
+
+    walk(screen)
+    digits = [d for d in "1234567890" if d in keys]
+    _check("keyboard: every digit is typeable", len(digits) == 10,
+           "found {} of 10: {}".format(len(digits), digits))
+    _check("keyboard: the letters are still there",
+           "ק" in keys and "ץ" in keys)
+
+    escaped = _escapes(screen)
+    _check("overflow: the text input stays on screen", not escaped,
+           str(escaped[:3]))
+
+    lv.screen_load(home)
+
+
 def test_add_device_page_stays_on_the_glass(home):
     """The add screen was never in this list, and three layout tasks follow.
 
@@ -1038,6 +1082,7 @@ def run():
     test_reopening_does_not_leak(home)
     test_add_device_rows()
     test_font_glyph_coverage()
+    test_text_input_offers_digits_and_stays_on_the_glass(home)
     test_add_device_page_stays_on_the_glass(home)
 
     failed = [name for name, ok, _ in _results if not ok]
