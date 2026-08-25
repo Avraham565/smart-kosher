@@ -13,7 +13,14 @@ import os
 import subprocess
 import sys
 
-from run_common import find_panel, mpremote, restore_main, run_on_device, sync_core
+from run_common import (
+    find_panel,
+    mpremote,
+    restore_main,
+    run_suite_on_device,
+    suite_verdict,
+    sync_core,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # host/ -> panel/ -> products/ -> repo root.
@@ -79,11 +86,12 @@ def _run_suite(port):
         return 1
 
     print("== running ==")
-    rc = run_on_device(
-        port, "import hwtest_ui; raise SystemExit(0 if hwtest_ui.run() else 1)",
-        RUN_TIMEOUT_S,
+    # Scored by what the suite printed, not by what mpremote returned: it
+    # returns 0 either way (finding 44), so SystemExit here was decorative.
+    lines = run_suite_on_device(
+        port, "import hwtest_ui; hwtest_ui.run()", RUN_TIMEOUT_S,
         hint="The last check printed above is the one it died on.")
-    return 1 if rc is None else rc
+    return suite_verdict(lines)
 
 
 def main():

@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 # The CrowPanel's USB bridge. It renumbers itself between COM7 and COM8 across
@@ -175,6 +176,75 @@ def _board_file_size(port, name):
             except ValueError:
                 return None
     return None
+
+
+SUITE_RESULT = "HWTEST_RESULT"
+
+
+def suite_verdict(lines):
+    """0 if the suite said it passed, 1 for anything else -- silence included.
+
+    mpremote does not carry the device's exit code back to the host. Measured
+    on 1.28.0: `exec "raise SystemExit(1)"` and `exec "raise SystemExit(0)"`
+    both return 0. So a suite scored with SystemExit exits 0 whether it passed
+    or failed, and every gate built on it is decorative. The whole of this
+    session's hardware verification -- 88 checks and their mutations -- was
+    ultimately a person reading stdout.
+
+    The verdict therefore comes from what the suite SAID, on a line it prints
+    exactly once. The rule that makes it safe is that no line is a failure: a
+    board that crashed, hung, or was reset mid-run never printed one, and
+    "nothing said" must never read as "nothing wrong". Two lines is also a
+    failure -- it means the output is not what we think it is.
+    """
+    marks = [line.strip() for line in lines
+             if line.strip().startswith(SUITE_RESULT)]
+    if not marks:
+        print("!! the suite never reported a result -- treating that as a "
+              "failure. The board stopped before the end of the run.")
+        return 1
+    if len(marks) > 1:
+        print("!! the suite reported {} results; expected one".format(
+            len(marks)))
+        return 1
+    parts = marks[0].split()
+    if len(parts) >= 2 and parts[1] == "pass":
+        return 0
+    print("!! the suite reported: {}".format(marks[0]))
+    return 1
+
+
+def run_suite_on_device(port, code, timeout, hint=None):
+    """Run a board suite, streaming its output, and return the lines it printed.
+
+    Streamed rather than captured because these runs take minutes and the last
+    line before a hang is the whole diagnosis. Collected as well, because the
+    caller has to read the verdict out of it -- see suite_verdict.
+    """
+    cmd = [sys.executable, "-m", "mpremote", "connect", port, "exec", code]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace")
+    lines = []
+
+    def pump():
+        for line in proc.stdout:
+            line = line.rstrip()
+            lines.append(line)
+            print(line)
+
+    reader = threading.Thread(target=pump)
+    reader.daemon = True
+    reader.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        print("!! no answer from the board after {}s -- killed".format(timeout))
+        if hint:
+            print("   " + hint)
+    reader.join(5)
+    return lines
 
 
 def restore_main(port, device_dir):

@@ -1164,4 +1164,9 @@ def run():
     print("{} of {} passed".format(len(_results) - len(failed), len(_results)))
     if failed:
         print("FAILED: " + ", ".join(failed))
+    # The one line the host scores this run by. It cannot import the constant
+    # from run_common -- that is host code and this is MicroPython -- so
+    # tests/test_hwtest_verdict.py pins the two spellings together.
+    print("HWTEST_RESULT " + ("fail {}".format(len(failed)) if failed
+                              else "pass"))
     return not failed

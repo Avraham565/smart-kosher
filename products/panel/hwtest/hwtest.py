@@ -316,6 +316,11 @@ async def _run(actuator, dut):
     print("\n=====================================")
     print(" {} passed, {} failed".format(r.passed, r.failed))
     print("=====================================")
+    # Scored by the host from this line. Every path that leaves _run before
+    # here -- an abort, a crash, a board that stops answering -- prints no
+    # line, and the host reads that as a failure rather than as silence.
+    print("HWTEST_RESULT " + ("fail {}".format(r.failed) if r.failed
+                              else "pass"))
 
 
 def run(actuator, dut):

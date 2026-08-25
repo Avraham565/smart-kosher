@@ -15,7 +15,14 @@ import os
 import subprocess
 import sys
 
-from run_common import find_panel, mpremote, restore_main, run_on_device, sync_core
+from run_common import (
+    find_panel,
+    mpremote,
+    restore_main,
+    run_suite_on_device,
+    suite_verdict,
+    sync_core,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # host/ -> panel/ -> products/ -> repo root.
@@ -51,12 +58,14 @@ def _run_suite(port, args):
         return 1
 
     print("== running ==")
-    rc = run_on_device(
+    # This suite never had a verdict at all: hwtest.run() returns None, so
+    # even a working exit code would have carried nothing. It prints one now.
+    lines = run_suite_on_device(
         port,
         "import hwtest; hwtest.run({!r}, {!r})".format(args.actuator, args.dut),
         RUN_TIMEOUT_S,
         hint="The last assertion printed above is the one it died on.")
-    return 1 if rc is None else rc
+    return suite_verdict(lines)
 
 
 def main():
