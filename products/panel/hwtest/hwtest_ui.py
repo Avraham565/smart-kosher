@@ -992,6 +992,31 @@ def test_font_glyph_coverage():
           "codepoints".format(len(reached), len(drawn)))
 
 
+def test_a_device_row_stays_tappable():
+    """The row height is derived now, so it can shrink without anyone typing it.
+
+    Capacity became the input and height the output, which is what stops the
+    page leaving a quarter of itself empty -- and it also means raising
+    DEVICES_PER_PAGE silently makes every row shorter. Six rows still fit in
+    the 264px the list has (37px each, 262 total), so every paging check here
+    would pass while the rows became too small to hit.
+
+    theme.TAP_MIN is the minimum touch target the theme declares, and it is
+    the thing the derivation can quietly cross.
+    """
+    import room_page
+
+    _check("paging: a device row is still a touch target",
+           room_page.ROW_H >= theme.TAP_MIN,
+           "row is {}px, tap minimum is {}px".format(
+               room_page.ROW_H, theme.TAP_MIN))
+    _check("paging: the rows fill the list they were derived from",
+           room_page.ROW_H * room_page.DEVICES_PER_PAGE
+           + (room_page.DEVICES_PER_PAGE - 1) * room_page._LIST_GAP
+           <= room_page.LIST_H,
+           "rows need more than the {}px the list has".format(room_page.LIST_H))
+
+
 def test_text_input_has_a_cursor(home):
     """You must be able to see where the next letter lands.
 
@@ -1131,6 +1156,7 @@ def run():
     test_font_glyph_coverage()
     test_text_input_offers_digits_and_stays_on_the_glass(home)
     test_text_input_has_a_cursor(home)
+    test_a_device_row_stays_tappable()
     test_add_device_page_stays_on_the_glass(home)
 
     failed = [name for name, ok, _ in _results if not ok]

@@ -9,14 +9,19 @@
 #
 # Pixel budget (800x480, and nothing here scrolls — see pager.py). This is the
 # tightest of the three list pages, because it is the only one carrying a
-# manage row as well:
-#     480 screen - 64 header                          = 416 body
-#     416 - 2*16 body padding                         = 384
-#     384 - 48 manage - 52 bottom bar - 2*10 pad_row  = 264 for the list
-#     264 fits floor((264 + 8) / (64 + 8))            = 3 rows
-# The "ללא חדר" bucket has no manage row and fits four, but one page cannot
-# have two capacities, so the worst case governs both. The arithmetic is the
-# estimate — hwtest_ui.py measures the real capacity and pins DEVICES_PER_PAGE.
+# manage row as well. The budget is computed below rather than written here,
+# so it cannot drift from the numbers the layout actually uses: this comment
+# said "= 3 rows" while the row height that produced it was a bare 64 in two
+# places, and nothing connected the two.
+#
+# The direction is now the other way round. Capacity is the input and the row
+# height is derived from it, so the list fills the space it has instead of
+# leaving a quarter of it empty under three tall rows.
+#
+# The "ללא חדר" bucket has no manage row and has more space, but one page
+# cannot have two capacities, so the tighter case governs both. The arithmetic
+# is still only the estimate — hwtest_ui.py measures the real capacity on the
+# glass and is the one that decides.
 
 import lvgl as lv
 
@@ -38,7 +43,20 @@ from widgets import (
 )
 
 # Pinned by hwtest_ui.test_lists_never_overflow_the_glass.
-DEVICES_PER_PAGE = 3
+# The chrome the list has to share the screen with. Separate names on purpose:
+# _BODY_PAD_ROW and theme.GAP are both 10 today and are not the same idea.
+_HEADER_H = 64
+_BODY_PAD = 16
+_BODY_PAD_ROW = 10
+_MANAGE_H = 48
+_LIST_GAP = 8
+_BAR_H = theme.TAP_MIN + 8
+
+LIST_H = (480 - _HEADER_H - 2 * _BODY_PAD - _MANAGE_H - _BAR_H
+          - 2 * _BODY_PAD_ROW)
+
+DEVICES_PER_PAGE = 4
+ROW_H = (LIST_H - (DEVICES_PER_PAGE - 1) * _LIST_GAP) // DEVICES_PER_PAGE
 
 _screen = None
 _list = None
@@ -148,13 +166,13 @@ def _device_row(parent, endpoint):
 
     name = w_card_button(row)
     name.set_flex_grow(1)
-    name.set_height(64)
+    name.set_height(ROW_H)
     name.add_event_cb(lambda e: _open_device(endpoint), lv.EVENT.CLICKED, None)
     w_label(name, theme.FONTS.title, theme.TEXT,
             endpoint.get("name") or "מכשיר").align(lv.ALIGN.RIGHT_MID, 0, 0)
 
     toggle = w_card_button(row)
-    toggle.set_size(120, 64)
+    toggle.set_size(120, ROW_H)
     toggle.add_event_cb(lambda e: dev_common.device_toggle(endpoint, toast.notify),
                         lv.EVENT.CLICKED, None)
     state = w_label(toggle, theme.FONTS.body, theme.MUTED, "—")
@@ -221,14 +239,14 @@ def _build():
     scr, body, title = shell.sub_page(_current["name"] or "חדר", on_back=_back,
                                       effects=_effects)
     _current["title"] = title
-    body.set_style_pad_all(16, lv.PART.MAIN)
+    body.set_style_pad_all(_BODY_PAD, lv.PART.MAIN)
     body.set_flex_flow(lv.FLEX_FLOW.COLUMN)
-    body.set_style_pad_row(10, lv.PART.MAIN)
+    body.set_style_pad_row(_BODY_PAD_ROW, lv.PART.MAIN)
 
     _list = w_group(body, lv.FLEX_FLOW.COLUMN)
     _list.set_width(lv.pct(100))
     _list.set_flex_grow(1)
-    _list.set_style_pad_row(8, lv.PART.MAIN)
+    _list.set_style_pad_row(_LIST_GAP, lv.PART.MAIN)
 
     if _current["zone_id"] is not None:
         # room management: rename / delete
@@ -237,12 +255,12 @@ def _build():
         manage.set_style_pad_column(theme.GAP, lv.PART.MAIN)
         rename = w_card_button(manage)
         rename.set_flex_grow(1)
-        rename.set_height(48)
+        rename.set_height(_MANAGE_H)
         rename.add_event_cb(_rename_room, lv.EVENT.CLICKED, None)
         w_label(rename, theme.FONTS.body, theme.TEXT, "שנה שם חדר").center()
         delete = w_card_button(manage)
         delete.set_flex_grow(1)
-        delete.set_height(48)
+        delete.set_height(_MANAGE_H)
         delete.add_event_cb(_delete_room, lv.EVENT.CLICKED, None)
         w_label(delete, theme.FONTS.body, theme.DANGER, "מחק חדר").center()
 
@@ -251,7 +269,7 @@ def _build():
     # writes the pager label on its first pass.
     bar = w_group(body, lv.FLEX_FLOW.ROW)
     bar.set_width(lv.pct(100))
-    bar.set_height(theme.TAP_MIN + 8)
+    bar.set_height(_BAR_H)
     bar.set_style_pad_column(theme.GAP, lv.PART.MAIN)
     _, _pager_label, _pager_controls = w_pager(
         bar, lambda: _turn(-1), lambda: _turn(1))
@@ -259,7 +277,7 @@ def _build():
     if _current["zone_id"] is not None:
         add = w_card_button(bar)
         add.set_flex_grow(1)
-        add.set_height(theme.TAP_MIN + 8)
+        add.set_height(_BAR_H)
         add.set_style_bg_color(theme.PRIMARY, lv.PART.MAIN)
         add.add_event_cb(_add_device, lv.EVENT.CLICKED, None)
         add_lbl = w_label(add, theme.FONTS.h1, theme.SURFACE, "")
