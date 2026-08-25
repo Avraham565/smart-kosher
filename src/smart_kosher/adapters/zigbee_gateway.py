@@ -174,6 +174,12 @@ class ZigbeeGateway(DeviceGateway):
         # None when clean; otherwise the tick by which the registry must reach
         # the flash. See _REGISTRY_COALESCE_MS.
         self._registry_due = None
+        # When the coordinator's join window closes, in ticks, or None. Learned
+        # from the wire rather than counted locally: permit_join_status arrives
+        # with the duration on open and with 0 on close, measured on this rig
+        # at +654ms and +10644ms for a 10s window. A local timer would be a
+        # second opinion about something the coordinator already states.
+        self._permit_join_until = None
         # ieee -> deadline while an identify pulse owns this device. Keyed by
         # ieee, not by gang: two gangs of one switch flashing at once confuses
         # the person watching exactly as much as it confuses the code.
@@ -390,7 +396,8 @@ class ZigbeeGateway(DeviceGateway):
 
     def status_info(self):
         info = {"gateway": "zigbee", "devices": len(self._registry),
-                "link_down": self._down}
+                "link_down": self._down,
+                "permit_join_seconds": self.permit_join_seconds()}
         info.update(self.info)
         return info
 
@@ -446,6 +453,8 @@ class ZigbeeGateway(DeviceGateway):
                     payload, payload.get("status") == "ok")
             elif op == "reporting_failed":
                 self._on_reporting_result(payload, False)
+            elif op == "permit_join_status":
+                self._on_permit_join(payload)
             elif op == "device_endpoints":
                 self._on_device_endpoints(payload)
             elif op == "device_clusters":
@@ -680,6 +689,28 @@ class ZigbeeGateway(DeviceGateway):
             # broken product, and the backoff keeps a dead one cheap.
             self._request_reporting(key[0], self._registry[key[0]], key[1],
                                     self._reporting_retry[key]["attempts"])
+
+    def _on_permit_join(self, payload):
+        """The coordinator saying how long its join window still has.
+
+        Nothing listened to this before, so the panel had no way to know the
+        window had shut and went on offering to pair into a closed one.
+        """
+        duration = payload.get("duration")
+        if not isinstance(duration, int) or duration <= 0:
+            self._permit_join_until = None
+            return
+        self._permit_join_until = ticks_add(ticks_ms(), duration * 1000)
+
+    def permit_join_seconds(self):
+        """Seconds left in the join window, 0 when it is shut."""
+        if self._permit_join_until is None:
+            return 0
+        left = ticks_diff(self._permit_join_until, ticks_ms())
+        if left <= 0:
+            self._permit_join_until = None
+            return 0
+        return (left + 999) // 1000
 
     def _on_device_endpoints(self, payload):
         """The device's real endpoint list, discovered after it joined.

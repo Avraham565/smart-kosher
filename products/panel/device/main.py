@@ -162,6 +162,15 @@ async def _devices_refresh(api):
             store.zones.set(await api.dispatch("zones.list"))
             store.groups.set(await api.dispatch("groups.list"))
             store.schedules.set(await api.dispatch("schedules.list"))
+            # The pairing state expires with the coordinator's window rather
+            # than waiting to be cancelled by hand. _try_autopair used to clear
+            # it after adopting; task 27 removed that function -- correctly --
+            # and nothing replaced the clear, so "searching for a device" stayed
+            # on screen for good, and went on claiming it over a window the
+            # coordinator had already shut.
+            store.apply_pairing_window(
+                (await api.dispatch("status.get")).get(
+                    "permit_join_seconds", 0))
         except Exception as exc:
             print("devices refresh error:", exc)
         await asyncio.sleep(_DEVICES_PERIOD_S)

@@ -31,6 +31,22 @@ zones = Signal([])          # the user's rooms
 groups = Signal([])         # named cross-room device sets (schedule targets)
 schedules = Signal([])      # automations
 pairing = Signal(None)      # zone_id being paired into (permit_join window), or None
+# Seconds left in that window, straight from the coordinator. The window closes
+# on its own after permit_join's duration, and nothing used to notice: the
+# button went on saying "searching" over a shut window.
+pairing_left = Signal(0)
+
+
+def apply_pairing_window(seconds):
+    """Publish how long the join window has left, and end pairing when it shuts.
+
+    Here rather than inline in main's poll loop so the on-device suite can call
+    the same rule instead of restating it -- a test that re-implements the
+    thing it checks passes for reasons of its own.
+    """
+    pairing_left.set(seconds)
+    if not seconds and pairing.get() is not None:
+        pairing.set(None)
 
 # ── transient user notification (errors / confirmations) ────────────────────
 toast = Signal("")

@@ -259,9 +259,19 @@ def _build():
         add_lbl = w_label(add, theme.FONTS.h1, theme.SURFACE, "")
         add_lbl.center()
         zone_id = _current["zone_id"]
-        _effects.append(bind_text(
-            add_lbl, lambda: "מחפש מכשיר… (ביטול)"
-            if store.pairing.get() == zone_id else "+ הוסף מכשיר"))
+        # Counting, not a boolean. The window really does end, so a label that
+        # only knows "searching" is stating something about the network that
+        # stops being true after three minutes -- and the seconds come from the
+        # coordinator, not from a clock here.
+        def _add_label():
+            if store.pairing.get() != zone_id:
+                return "+ הוסף מכשיר"
+            left = store.pairing_left.get()
+            if not left:
+                return "+ הוסף מכשיר"
+            return "מחפש… {}:{:02d} (ביטול)".format(left // 60, left % 60)
+
+        _effects.append(bind_text(add_lbl, _add_label))
 
     _effects.append(effect(_rebuild))
     return scr

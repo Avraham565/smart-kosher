@@ -860,6 +860,22 @@ def test_optimistic_write_touches_one_gang():
     store.devices.set({})
 
 
+# ── pairing window ───────────────────────────────────────────────────────────
+
+def test_pairing_state_expires_with_the_window():
+    """The window shuts on its own; the panel state has to shut with it."""
+    import store
+    store.pairing.set("z_1")
+    store.apply_pairing_window(120)
+    _check("pairing: state survives while the window is open",
+           store.pairing.get() == "z_1" and store.pairing_left.get() == 120)
+
+    store.apply_pairing_window(0)        # what the poll does at the window's end
+    _check("pairing: state clears when the window closes",
+           store.pairing.get() is None, str(store.pairing.get()))
+    store.pairing_left.set(0)
+
+
 def run():
     print("== UI hardware tests ==")
     print("bringing up the display")
@@ -881,6 +897,7 @@ def run():
     test_add_device_rows()
     test_device_state_is_per_gang()
     test_optimistic_write_touches_one_gang()
+    test_pairing_state_expires_with_the_window()
 
     failed = [name for name, ok, _ in _results if not ok]
     print()
