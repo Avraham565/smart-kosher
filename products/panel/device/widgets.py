@@ -77,14 +77,17 @@ def w_header(parent, height, pad_hor):
 
 
 def w_pager(parent, on_prev, on_next):
-    """The pager controls — ``› prev · 2 / 3 · next ‹`` — as one compact group.
+    """The pager controls — ``> prev | 2 / 3 | next <`` — as one compact group.
 
     Meant to sit in a page's bottom bar beside its add button, so paging costs
     no vertical budget of its own; on a 480px panel a dedicated row would have
     taken a whole card off every list. The arrows are TAP_MIN square, which is
     the same reason a shrinking card was rejected (see pager.py).
 
-    RTL: the first child lands on the right, so "previous" is ``›``.
+    RTL: the first child lands on the right, so "previous" is ``>``.
+    ASCII rather than the typographic chevrons these used to be: the
+    Assistant .bin fonts carry no U+203A/U+2039, so both rendered as
+    boxes. Measured, not assumed -- see test_font_glyph_coverage.
 
     Returns (group, position_label, controls). Hide ``controls`` on a
     single-page list rather than removing them — the group keeps its size, so
@@ -101,7 +104,7 @@ def w_pager(parent, on_prev, on_next):
     prev.set_size(size, size)
     prev.set_style_pad_all(0, lv.PART.MAIN)
     prev.add_event_cb(lambda e: on_prev(), lv.EVENT.CLICKED, None)
-    w_label(prev, theme.FONTS.title, theme.TEXT, "›").center()
+    w_label(prev, theme.FONTS.title, theme.TEXT, ">").center()
 
     # Fixed width: "1 / 1" and "10 / 12" must not resize the group and shove
     # the add button around on every page turn.
@@ -114,7 +117,7 @@ def w_pager(parent, on_prev, on_next):
     nxt.set_size(size, size)
     nxt.set_style_pad_all(0, lv.PART.MAIN)
     nxt.add_event_cb(lambda e: on_next(), lv.EVENT.CLICKED, None)
-    w_label(nxt, theme.FONTS.title, theme.TEXT, "‹").center()
+    w_label(nxt, theme.FONTS.title, theme.TEXT, "<").center()
 
     return group, position, (prev, nxt)
 

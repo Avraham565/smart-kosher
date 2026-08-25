@@ -128,7 +128,7 @@ def _confirm(e):
 
     api = _state["api"]
     date = "%04d-%02d-%02d" % (vals["year"], vals["month"], vals["day"])
-    _set_msg("שומר…", theme.MUTED)
+    _set_msg("שומר...", theme.MUTED)
 
     def _with_offset(today):
         offset = today.get("utc_offset_minutes", 120)

@@ -70,7 +70,7 @@ def _build():
     back.set_style_shadow_width(0, lv.PART.MAIN)
     back.align(lv.ALIGN.LEFT_MID, 0, 0)
     back.add_event_cb(_cancel, lv.EVENT.CLICKED, None)
-    w_label(back, theme.FONTS.body, theme.TEXT, "› ביטול").center()
+    w_label(back, theme.FONTS.body, theme.TEXT, "ביטול").center()
 
     body = lv.obj(scr)
     body.set_size(lv.pct(100), 480 - 64)

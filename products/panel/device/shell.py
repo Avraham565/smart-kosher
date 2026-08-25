@@ -56,7 +56,7 @@ def sub_page(title, on_back=None, effects=None):
     back.align(lv.ALIGN.LEFT_MID, 0, 0)
     handler = _back_cb if on_back is None else (lambda e: on_back())
     back.add_event_cb(handler, lv.EVENT.CLICKED, None)
-    w_label(back, theme.FONTS.body, theme.TEXT, "› חזרה").center()
+    w_label(back, theme.FONTS.body, theme.TEXT, "חזרה").center()
 
     if SHELL_CORNER_CLOCK:
         mini = w_label(header, theme.FONTS.body, theme.MUTED, "")

@@ -126,7 +126,7 @@ def _add(row):
 
 def _identify(row):
     """Flip this gang for a moment so the user can see which one it is."""
-    _toast("מהבהב…")
+    _toast("מהבהב...")
     bridge.dispatch(store.api, "zigbee.identify",
                     {"ieee": row["ieee"], "endpoint": row["endpoint"]},
                     on_ok=_identified,
@@ -184,12 +184,12 @@ def _build():
             # Named, not hidden: a device that is here but not yet understood
             # is exactly what the user is waiting on.
             w_label(column, theme.FONTS.body, theme.TEXT,
-                    "מזהה יכולות…  {}".format(ieee[-8:]))
+                    "מזהה יכולות...  {}".format(ieee[-8:]))
         for row in ready:
             card = w_card_button(column)
             card.set_width(lv.pct(100))
             card.set_height(theme.TAP_MIN + 16)
-            label = "{}  ·  גאנג {}".format(row["ieee"][-8:], row["endpoint"]) \
+            label = "{}  |  גאנג {}".format(row["ieee"][-8:], row["endpoint"]) \
                 if row["gangs"] > 1 else row["ieee"][-8:]
             w_label(card, theme.FONTS.body, theme.TEXT, label)
             # The card stays tappable, but it is no longer the only way in.

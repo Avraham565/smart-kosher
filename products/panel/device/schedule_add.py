@@ -206,7 +206,7 @@ def _zone_tags(tag_items):
         more.set_size(lv.SIZE_CONTENT, _ZONE_TAG_H)
         more.add_event_cb(lambda e: _turn_tags(), lv.EVENT.CLICKED, None)
         w_label(more, theme.FONTS.small, theme.PRIMARY,
-                "עוד ({}/{}) ›".format(_tag_page + 1, pages)).center()
+                "עוד ({}/{})".format(_tag_page + 1, pages)).center()
     for label, zone_id in shown:
         selected = zone_id in _target_zones
         chip = w_card_button(tags)
@@ -264,7 +264,7 @@ def _trigger_type():
         _draft["trigger_type"] = value
         _goto("fixed_time" if value == "fixed_time" else "zman")
     _grid([("שעה קבועה", "fixed_time"), ("זמן הלכה", "zman"),
-           ("זמן ± דקות", "zman_offset")], pick)
+           ("זמן +/- דקות", "zman_offset")], pick)
 
 
 def _numeric(prompt, fmt, max_len, on_ok):

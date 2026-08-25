@@ -801,6 +801,185 @@ def test_add_device_rows():
 
 
 
+def _glyph_probe():
+    """(call_shape, fn) for asking a font whether it has a codepoint.
+
+    Discovered rather than assumed: a first attempt guessed
+    font.get_glyph_dsc(dsc, cp, 0) and every call raised "takes 4 positional
+    arguments but 3 were given" -- which, had it printed a bool instead of the
+    exception, would have read as "every glyph is missing" and been wrong in
+    the most convincing way.
+    """
+    dsc = lv.font_glyph_dsc_t()
+    shapes = (
+        ("font.get_glyph_dsc(dsc, cp, 0)",
+         lambda font, cp: font.get_glyph_dsc(dsc, cp, 0)),
+        ("font.get_glyph_dsc(font, dsc, cp, 0)",
+         lambda font, cp: font.get_glyph_dsc(font, dsc, cp, 0)),
+        ("lv.font_get_glyph_dsc(font, dsc, cp, 0)",
+         lambda font, cp: lv.font_get_glyph_dsc(font, dsc, cp, 0)),
+    )
+    for name, fn in shapes:
+        try:
+            fn(theme.FONTS.body, 0x0041)      # "A" must exist in any font
+            return name, fn
+        except Exception:
+            continue
+    return None, None
+
+
+# 32 modules ship in products/panel/device today. The floor is deliberately
+# well under that: it is here to catch a walk that collapsed, not to notice
+# somebody deleting a page.
+_MIN_REACHABLE = 20
+
+
+def _reachable_modules():
+    """Module names the product actually loads, walked from main.
+
+    The board's filesystem is not the product. house_page.py was deleted from
+    git on 2026-08-02 and is still sitting on the flash at the same 5308 bytes,
+    because deploy copies files and never prunes them. Scanning "/" therefore
+    reports characters from code that no longer runs, and the first widened
+    version of this check failed on an ellipsis in exactly that orphan.
+
+    Walking imports from main means the answer tracks what is rendered rather
+    than what the flash has accumulated, so the check does not quietly become a
+    filesystem-hygiene test.
+    """
+    import os
+    have = set()
+    for name in os.listdir("/"):
+        if name.endswith(".py"):
+            have.add(name[:-3])
+    seen = set()
+    # main_src is the copy the runner stashes: clean_board deletes main.py
+    # before the suite starts, so on a live run "main" is the name that is not
+    # there. Both are listed because the suite is also runnable by hand on a
+    # board that still has its main.py.
+    queue = ["main", "main_src"]
+    while queue:
+        module = queue.pop()
+        if module in seen or module not in have:
+            continue
+        seen.add(module)
+        try:
+            source = open("/" + module + ".py", encoding="utf-8").read()
+        except Exception:
+            continue
+        for line in source.splitlines():
+            stripped = line.strip()
+            name = None
+            if stripped.startswith("import "):
+                name = stripped[7:].split()[0].split(",")[0].split(".")[0]
+            elif stripped.startswith("from "):
+                name = stripped[5:].split()[0].split(".")[0]
+            if name and name in have:
+                queue.append(name)
+    return seen
+
+
+def _drawn_codepoints():
+    """Every non-ASCII, non-Hebrew codepoint in a string literal the panel runs.
+
+    Derived from the source rather than kept by hand. A hand-kept list ages:
+    someone adds an arrow next month and the list does not know, which is the
+    difference between "we fixed five characters" and "this cannot happen
+    again".
+
+    Comments and docstrings are stripped, and then the rule that makes this
+    sound: outside them, Python source is ASCII except inside string literals,
+    because identifiers and syntax are. So whatever non-ASCII survives the
+    strip is text, and text on this panel is text that gets drawn.
+
+    A narrower first attempt matched only lines containing w_label or set_text
+    and reported one codepoint for the whole product. Most drawn text is built
+    in a helper and handed to a binding, so that filter would have caught two
+    of the five characters this task removed -- it was measuring its own
+    narrowness, not the code.
+
+    Stripping comments is what keeps the box-drawing out: U+2500 appears in
+    section rules and is never rendered, and a check with hundreds of false
+    positives is one people learn to skip.
+    """
+    triple_d = chr(34) * 3
+    triple_s = chr(39) * 3
+    found = {}
+    reached = _reachable_modules()
+    for module in reached:
+        try:
+            source = open("/" + module + ".py", encoding="utf-8").read()
+        except Exception:
+            continue
+        in_doc = False
+        for line in source.splitlines():
+            marks = line.count(triple_d) + line.count(triple_s)
+            if in_doc:
+                if marks:
+                    in_doc = False
+                continue
+            if marks % 2:
+                in_doc = True
+                continue
+            if line.strip().startswith("#"):
+                continue
+            for ch in line:
+                cp = ord(ch)
+                if cp < 0x7F or 0x0590 <= cp <= 0x05FF:
+                    continue
+                found.setdefault(cp, module + ".py")
+    return found, reached
+
+
+def test_font_glyph_coverage():
+    """No codepoint the UI draws may be missing from the font that draws it.
+
+    The icons that rendered as boxes were not LV_SYMBOL -- they were
+    typographic characters, and theme.py describes the .bin files as
+    "Hebrew-ranged" without anything checking what that range holds. load_fonts
+    asks only whether the font object is not None.
+    """
+    shape, ask = _glyph_probe()
+    if not _check("font: glyph coverage can be queried at all", ask is not None,
+                  "no call shape worked"):
+        return
+    print("  note  glyph query: {}".format(shape))
+
+    fonts = (("small", theme.FONTS.small), ("body", theme.FONTS.body),
+             ("title", theme.FONTS.title), ("h1", theme.FONTS.h1),
+             ("clock", theme.FONTS.clock))
+    # The control row: if these ever fail the query is broken, not the fonts.
+    for name, cp in (("A", 0x0041), ("alef", 0x05D0), ("hyphen", 0x002D)):
+        _check("font: control glyph {} present".format(name),
+               all(ask(font, cp) for _n, font in fonts))
+
+    missing = []
+    drawn, reached = _drawn_codepoints()
+    # The scan is only worth reading if it saw the product. Its first version
+    # reached zero modules -- the runner had deleted the main.py it walks from
+    # -- and reported "every drawn codepoint exists" over an empty set. A check
+    # that passes loudest when it measured nothing is worse than no check, so
+    # too few modules is a failure, not a quiet pass.
+    if not _check("font: the codepoint scan can see the product",
+                  len(reached) >= _MIN_REACHABLE,
+                  "reached {} modules, expected at least {}".format(
+                      len(reached), _MIN_REACHABLE)):
+        return
+    for cp in sorted(drawn):
+        absent = [n for n, font in fonts if not ask(font, cp)]
+        if absent:
+            missing.append("{:#06x} in {} (missing from {})".format(
+                cp, drawn[cp], ",".join(absent)))
+    _check("font: every drawn codepoint exists in the Assistant fonts",
+           not missing, "; ".join(missing[:4]))
+    # The module count is printed because a collapse in coverage is what
+    # this check's first version actually suffered: it reported one
+    # codepoint for the whole product and passed. A reader who sees the
+    # reachable count drop knows the instrument moved, not the code.
+    print("  note  {} modules reachable from main, {} non-ASCII drawn "
+          "codepoints".format(len(reached), len(drawn)))
+
+
 def test_add_device_page_stays_on_the_glass(home):
     """The add screen was never in this list, and three layout tasks follow.
 
@@ -858,6 +1037,7 @@ def run():
     test_deleting_a_sub_page_releases_its_clock(home)
     test_reopening_does_not_leak(home)
     test_add_device_rows()
+    test_font_glyph_coverage()
     test_add_device_page_stays_on_the_glass(home)
 
     failed = [name for name, ok, _ in _results if not ok]

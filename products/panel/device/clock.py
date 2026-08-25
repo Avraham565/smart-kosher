@@ -26,9 +26,9 @@ def _hebrew_text():
     today = store.today.get()
     if not today:
         # Prompt only while the clock is unset; otherwise stay blank until data.
-        return "· לחצו לכיוון השעה" if store.now.get() is None else ""
+        return "לחצו לכיוון השעה" if store.now.get() is None else ""
     heb = today.get("hebrew_date") or {}
-    return "· " + hebdate.date_str(heb["year"], heb["month"], heb["day"])
+    return hebdate.date_str(heb["year"], heb["month"], heb["day"])
 
 
 def _gregorian_text():

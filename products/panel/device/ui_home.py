@@ -193,7 +193,7 @@ def _footer():
         parts.append("H2 מנותק")
     if store.clock_unset.get():
         parts.append("השעון לא כוון")
-    return " · ".join(parts), theme.SUCCESS
+    return " | ".join(parts), theme.SUCCESS
 
 
 def _apply_footer():

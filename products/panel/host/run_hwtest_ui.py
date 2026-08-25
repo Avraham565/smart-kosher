@@ -112,10 +112,24 @@ def main():
     # the panel dark, with the restore skipped and nothing saying so. That is
     # the state a run is *most* likely to end in, because it is the state a bug
     # in the UI produces.
+    # The glyph check walks imports from main.py to learn which modules the
+    # product actually draws with, and clean_board has just deleted main.py.
+    # Left alone the walk starts nowhere, reaches zero modules and passes over
+    # an empty set -- it reported "0 modules reachable" and PASSED before this
+    # existed. A copy under a name MicroPython will not auto-run gives the walk
+    # its root back without giving the board a second boot script.
+    stashed = mpremote(port, "cp", os.path.join(DEVICE, "main.py"),
+                       ":main_src.py") == 0
+    if not stashed:
+        print("!! could not stash main.py; the glyph scan will report that it "
+              "could not see the product rather than passing over nothing")
+
     rc = 1
     try:
         rc = _run_suite(port)
     finally:
+        if stashed:
+            mpremote(port, "rm", ":main_src.py")
         restored = args.keep_repl or restore_main(port, DEVICE)
     return rc if restored else 1
 

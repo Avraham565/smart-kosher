@@ -37,7 +37,7 @@ def _every(schedule):
 
 
 def describe(schedule, target_name):
-    """'<target> · הדלק/כבה · <when> · <recurrence>'."""
+    """'<target> | הדלק/כבה | <when> | <recurrence>'."""
     action = "הדלק" if schedule.get("action_type") == "on" else "כבה"
     parts = [target_name, action, _when(schedule), _every(schedule)]
-    return " · ".join(p for p in parts if p)
+    return " | ".join(p for p in parts if p)

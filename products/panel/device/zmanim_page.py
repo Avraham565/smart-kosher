@@ -81,7 +81,7 @@ def _date_text():
     parasha = hebdate.parasha_str(today.get("parasha"))
     if parasha:
         parts.append("פרשת " + parasha)
-    return " · ".join(p for p in parts if p)
+    return " | ".join(p for p in parts if p)
 
 
 def _row(parent, key, label):

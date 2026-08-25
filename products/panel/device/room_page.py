@@ -275,7 +275,7 @@ def _build():
             left = store.pairing_left.get()
             if not left:
                 return "+ הוסף מכשיר"
-            return "מחפש… {}:{:02d} (ביטול)".format(left // 60, left % 60)
+            return "מחפש... {}:{:02d} (ביטול)".format(left // 60, left % 60)
 
         _effects.append(bind_text(add_lbl, _add_label))
 
