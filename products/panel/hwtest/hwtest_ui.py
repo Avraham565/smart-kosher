@@ -793,6 +793,73 @@ def test_add_device_rows():
     store.endpoints.set([])
 
 
+# ── device state, per gang ───────────────────────────────────────────────────
+
+def test_device_state_is_per_gang():
+    """One tap must move one row. This is what the user saw go wrong."""
+    import dev_common
+    import store
+    IEEE = "70:d0:7e:ff:fe:6e:c6:40"
+    g1 = {"id": "e1", "ieee_address": IEEE, "zigbee_endpoint": 1}
+    g2 = {"id": "e2", "ieee_address": IEEE, "zigbee_endpoint": 2}
+    two_gang = {"endpoints": [1, 2], "clusters": {"1": [0, 3, 6], "2": [0, 3, 6]}}
+
+    store.devices.set({IEEE: dict(two_gang, endpoint_on_off={1: False, 2: True})})
+    _check("gang: each row reads its own endpoint",
+           dev_common.device_state(g1)[0] == "כבוי"
+           and dev_common.device_state(g2)[0] == "דלוק",
+           "{} / {}".format(dev_common.device_state(g1)[0],
+                            dev_common.device_state(g2)[0]))
+
+    # No cell for this gang on a device known to have two: "—" beats the
+    # neighbour's value. Falling back device-wide is the Z2M silent-fallback.
+    store.devices.set({IEEE: dict(two_gang, on_off=True, endpoint_on_off={2: True})})
+    _check("gang: a missing cell does not borrow the neighbour",
+           dev_common.device_state(g1)[0] == "—",
+           dev_common.device_state(g1)[0])
+
+    # Single-gang device: the device-level value is still the right answer.
+    store.devices.set({IEEE: {"endpoints": [1], "clusters": {"1": [0, 3, 6]},
+                              "on_off": True}})
+    _check("gang: a one-gang device still reads device-wide",
+           dev_common.device_state(g1)[0] == "דלוק",
+           dev_common.device_state(g1)[0])
+
+    # unreachable is the radio's, not the relay's -- both rows show it.
+    store.devices.set({IEEE: dict(two_gang, unreachable=True,
+                                  endpoint_on_off={1: False, 2: True})})
+    _check("gang: unreachable is device-wide",
+           dev_common.device_state(g1)[0] == "לא זמין"
+           and dev_common.device_state(g2)[0] == "לא זמין")
+    store.devices.set({})
+
+
+def test_optimistic_write_touches_one_gang():
+    """The guess goes in one cell, so one row lights up."""
+    import dev_common
+    import store
+    IEEE = "70:d0:7e:ff:fe:6e:c6:40"
+    g1 = {"id": "e1", "ieee_address": IEEE, "zigbee_endpoint": 1}
+    g2 = {"id": "e2", "ieee_address": IEEE, "zigbee_endpoint": 2}
+    store.devices.set({IEEE: {"endpoints": [1, 2],
+                              "clusters": {"1": [0, 3, 6], "2": [0, 3, 6]},
+                              "endpoint_on_off": {1: False, 2: False}}})
+    saved, store.api = store.api, None       # dispatch is a no-op without it
+    try:
+        dev_common.device_toggle(g1)
+    except Exception:
+        pass
+    finally:
+        store.api = saved
+    cells = store.devices.get()[IEEE].get("endpoint_on_off")
+    _check("gang: the optimistic write lands in one cell",
+           cells == {1: True, 2: False}, str(cells))
+    _check("gang: the neighbour row is unchanged",
+           dev_common.device_state(g2)[0] == "כבוי",
+           dev_common.device_state(g2)[0])
+    store.devices.set({})
+
+
 def run():
     print("== UI hardware tests ==")
     print("bringing up the display")
@@ -812,6 +879,8 @@ def run():
     test_deleting_a_sub_page_releases_its_clock(home)
     test_reopening_does_not_leak(home)
     test_add_device_rows()
+    test_device_state_is_per_gang()
+    test_optimistic_write_touches_one_gang()
 
     failed = [name for name, ok, _ in _results if not ok]
     print()

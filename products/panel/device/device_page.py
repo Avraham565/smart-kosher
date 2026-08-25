@@ -29,8 +29,7 @@ def _back():
 
 
 def _toggle(e):
-    ep = _endpoint()
-    dev_common.device_toggle(ep["id"], ep.get("ieee_address"))
+    dev_common.device_toggle(_endpoint())
 
 
 def _rename(e):
@@ -134,7 +133,6 @@ def _build():
     body.set_flex_align(lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.START,
                         lv.FLEX_ALIGN.CENTER)
 
-    ieee = ep.get("ieee_address")
     toggle = w_card_button(body)
     toggle.set_width(lv.pct(100))
     toggle.set_flex_grow(1)
@@ -143,7 +141,7 @@ def _build():
     state.center()
 
     def _apply():
-        text, color = dev_common.device_state(ieee)
+        text, color = dev_common.device_state(_endpoint())
         state.set_text(text)
         state.set_style_text_color(color, lv.PART.MAIN)
 

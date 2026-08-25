@@ -131,8 +131,9 @@ def _delete_room(e):
 
 
 def _device_row(parent, endpoint):
-    ieee = endpoint.get("ieee_address")
-    ep_id = endpoint["id"]
+    # The entity is what the state layer is asked about now, so nothing here
+    # unpacks its ieee: a row is one gang, and (ieee, zigbee_endpoint) is what
+    # identifies one.
     row = w_group(parent, lv.FLEX_FLOW.ROW)
     row.set_width(lv.pct(100))
     row.set_style_pad_column(theme.GAP, lv.PART.MAIN)
@@ -148,13 +149,13 @@ def _device_row(parent, endpoint):
 
     toggle = w_card_button(row)
     toggle.set_size(120, 64)
-    toggle.add_event_cb(lambda e: dev_common.device_toggle(ep_id, ieee),
+    toggle.add_event_cb(lambda e: dev_common.device_toggle(endpoint),
                         lv.EVENT.CLICKED, None)
     state = w_label(toggle, theme.FONTS.body, theme.MUTED, "—")
     state.center()
 
     def _apply():
-        text, color = dev_common.device_state(ieee)
+        text, color = dev_common.device_state(endpoint)
         state.set_text(text)
         state.set_style_text_color(color, lv.PART.MAIN)
 
