@@ -68,7 +68,27 @@ PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
 RUN_TIMEOUT_S = 600
 
 
-def _run_suite(port):
+def _run_probe(port, invalidate):
+    """Drive the striping probe instead of the suite. A person reads the panel.
+
+    Scored by PROBE_DONE rather than by suite_verdict, and the difference is
+    deliberate: this run has no pass or fail in it. The exit code says the
+    probe reached the end without the board dying, and nothing else. What was
+    seen is the finding, and only a person can supply it.
+    """
+    lines = run_suite_on_device(
+        port,
+        "import hwtest_ui; hwtest_ui.probe_screen_transition_striping("
+        "invalidate={})".format(invalidate),
+        RUN_TIMEOUT_S,
+        hint="The probe died mid-run; the panel may be mid-transition.")
+    if any(line.strip().startswith("PROBE_DONE") for line in lines):
+        return 0
+    print("!! the probe never reached the end -- nothing was measured")
+    return 1
+
+
+def _run_suite(port, args=None):
     print("== uploading ==")
     if mpremote(port, "cp", os.path.join(HWTEST, SUITE), ":" + SUITE) != 0:
         return 1
@@ -88,6 +108,8 @@ def _run_suite(port):
     print("== running ==")
     # Scored by what the suite printed, not by what mpremote returned: it
     # returns 0 either way (finding 44), so SystemExit here was decorative.
+    if args is not None and args.probe_striping:
+        return _run_probe(port, args.invalidate)
     lines = run_suite_on_device(
         port, "import hwtest_ui; hwtest_ui.run()", RUN_TIMEOUT_S,
         hint="The last check printed above is the one it died on.")
@@ -99,6 +121,12 @@ def main():
     parser.add_argument("--port")
     parser.add_argument("--keep-repl", action="store_true",
                         help="leave main.py off (screen stays blank)")
+    parser.add_argument("--probe-striping", action="store_true",
+                        help="swap between two loaded screens and watch the "
+                             "panel, instead of running the suite (task 47)")
+    parser.add_argument("--invalidate", type=int, default=0,
+                        help="with --probe-striping: invalidate the active "
+                             "screen N times after each load")
     args = parser.parse_args()
 
     port = args.port or find_panel()
@@ -134,7 +162,7 @@ def main():
 
     rc = 1
     try:
-        rc = _run_suite(port)
+        rc = _run_suite(port, args)
     finally:
         if stashed:
             mpremote(port, "rm", ":main_src.py")

@@ -1134,6 +1134,193 @@ def test_add_device_page_stays_on_the_glass(home):
 
 
 
+def _probe_ruler(parent, ink):
+    """A scale down the left edge, so a stripe's height can be READ.
+
+    The eye is the instrument in this probe, and an instrument without a scale
+    returns "a few stripes, fairly thin". Ticks sit every 48px because that is
+    the panel's partial draw buffer: display.py leaves frame_buffer1/2 unset,
+    the driver allocates ~1/10-screen buffers, and 1/10 of 800x480 as full
+    width lines is exactly 48 rows.
+
+    That number is the whole reason the ruler is here. If a stripe measures 48
+    or 96, geometry is back in play whatever its position; if the heights come
+    out arbitrary, the buffer is not what decides them.
+    """
+    from widgets import w_label
+
+    column = lv.obj(parent)
+    column.set_size(58, SCREEN_H)
+    column.set_pos(0, 0)
+    column.set_style_bg_opa(lv.OPA.TRANSP, lv.PART.MAIN)
+    column.set_style_border_width(0, lv.PART.MAIN)
+    column.set_style_pad_all(0, lv.PART.MAIN)
+    column.remove_flag(lv.obj.FLAG.SCROLLABLE)
+    for y in range(0, SCREEN_H, 48):
+        tick = lv.obj(column)
+        tick.set_size(16, 2)
+        tick.set_pos(0, y)
+        tick.set_style_bg_color(ink, lv.PART.MAIN)
+        tick.set_style_border_width(0, lv.PART.MAIN)
+        tick.remove_flag(lv.obj.FLAG.SCROLLABLE)
+        mark = w_label(column, theme.FONTS.small, ink, str(y))
+        mark.set_pos(20, y - 8)
+    return column
+
+
+def _probe_screen(name, bg, ink, card):
+    """One screen loaded like a real page: header, four rows, a bottom bar.
+
+    An empty screen would prove nothing -- 115ms of drawing is what makes a
+    transition non-atomic, and an empty screen does not spend it. The two
+    screens are built in maximum contrast (near-black against near-white) for
+    one reason: a leftover band from the other one has to be unmistakable
+    rather than a shade someone could talk themselves into.
+    """
+    from widgets import w_label
+
+    scr = lv.obj(None)
+    scr.set_style_bg_color(bg, lv.PART.MAIN)
+    scr.set_style_pad_all(0, lv.PART.MAIN)
+    scr.remove_flag(lv.obj.FLAG.SCROLLABLE)
+
+    _probe_ruler(scr, ink)
+
+    head = lv.obj(scr)
+    head.set_size(SCREEN_W - 64, 64)
+    head.set_pos(64, 0)
+    head.set_style_bg_color(card, lv.PART.MAIN)
+    head.set_style_border_width(0, lv.PART.MAIN)
+    head.remove_flag(lv.obj.FLAG.SCROLLABLE)
+    counter = w_label(head, theme.FONTS.title, ink, name)
+    counter.align(lv.ALIGN.RIGHT_MID, -12, 0)
+
+    for row in range(4):
+        card_obj = lv.obj(scr)
+        card_obj.set_size(SCREEN_W - 220, 60)
+        card_obj.set_pos(180, 80 + row * 68)
+        card_obj.set_style_bg_color(card, lv.PART.MAIN)
+        card_obj.set_style_border_width(0, lv.PART.MAIN)
+        card_obj.remove_flag(lv.obj.FLAG.SCROLLABLE)
+        w_label(card_obj, theme.FONTS.body, ink,
+                "{} {}".format(name, row + 1)).align(lv.ALIGN.RIGHT_MID, 0, 0)
+
+        state = lv.obj(scr)
+        state.set_size(110, 60)
+        state.set_pos(64, 80 + row * 68)
+        state.set_style_bg_color(ink, lv.PART.MAIN)
+        state.set_style_border_width(0, lv.PART.MAIN)
+        state.remove_flag(lv.obj.FLAG.SCROLLABLE)
+        w_label(state, theme.FONTS.body, bg, "on/off").center()
+
+    bar = lv.obj(scr)
+    bar.set_size(SCREEN_W - 64, 52)
+    bar.set_pos(64, SCREEN_H - 52)
+    bar.set_style_bg_color(card, lv.PART.MAIN)
+    bar.set_style_border_width(0, lv.PART.MAIN)
+    bar.remove_flag(lv.obj.FLAG.SCROLLABLE)
+    w_label(bar, theme.FONTS.body, ink, name).center()
+    return scr, counter
+
+
+def probe_screen_transition_striping(swaps=20, hold_ms=1500, invalidate=0):
+    """Swap between two loaded screens while nothing else runs. A person watches.
+
+    This exists because the measurement that closed task 42 answered a question
+    nobody asked. 114.8ms of full repaint against a 22.8ms frame period proves
+    a transition cannot be atomic -- true, and no explanation at all for bands
+    that STAY on the glass after the transition ends. A tear is gone in the
+    next frame. A residue is not.
+
+    What points away from geometry is where the bands appear: they have no
+    fixed position. Buffer boundaries are geometry and would put them at the
+    same heights every time. A position that moves points at timing, and this
+    panel runs LVGL, the brain and the scheduler on one cooperative asyncio
+    loop -- brain.create blocks 840ms, a registry save ~350ms, a join burst
+    1.75s, and main.py's own comment puts ~89ms as the point where arriving
+    frames start being dropped. The device poll runs every three seconds
+    against a 115ms repaint.
+
+    So this is the separating experiment, and it separates by SUBTRACTION: the
+    runner deletes main.py before the suite starts, which means that while this
+    probe runs there is no brain, no poll and no scheduler at all. Nothing on
+    this board can interrupt a transition except LVGL itself.
+
+      no bands here  -> the drawing is fine on its own and something else was
+                        interrupting it. The fix is about what runs during a
+                        transition, not about how the transition is drawn.
+      bands here     -> it is in the drawing, and invalidation comes back into
+                        play. The follow-up is `invalidate` 1 then 2: with two
+                        framebuffers a single invalidate only lands on
+                        alternating swaps, so "1 fixes half, 2 fixes all" is a
+                        signature, not a coincidence.
+
+    Nothing is printed between the swaps, deliberately. Console traffic over
+    the serial link during a transition is exactly the kind of interruption
+    under test, and an instrument that perturbs what it measures answers about
+    itself. The swap number is on the SCREEN instead, so what the watcher
+    reports can be matched to the timings printed at the end.
+
+    Timing is collected per swap so an eye-report becomes data: if the swaps
+    that showed bands are also the slow ones, that is the collision hypothesis
+    with a number attached.
+    """
+    import time
+
+    print("== striping probe: {} swaps, {}ms apart ==".format(swaps, hold_ms))
+    print("   quiet board: main.py is deleted by the runner, so no brain,")
+    print("   no device poll and no scheduler are running.")
+    if invalidate:
+        print("   invalidate() called {}x after each load".format(invalidate))
+    print("   WATCH THE PANEL. The swap number is in the header and the")
+    print("   bottom bar; the left edge is a ruler in 48px steps.")
+    print("   Starting in 3 seconds.")
+    time.sleep(3)
+
+    dark, light = lv.color_hex(0x101014), lv.color_hex(0xF2F2F0)
+    a, a_counter = _probe_screen("A", dark, light, lv.color_hex(0x2A2A32))
+    b, b_counter = _probe_screen("B", light, dark, lv.color_hex(0xD8D8D4))
+
+    lv.screen_load(a)
+    lv.refr_now(None)
+    time.sleep_ms(hold_ms)
+
+    times = []
+    for index in range(1, swaps + 1):
+        target, counter = (b, b_counter) if index % 2 else (a, a_counter)
+        name = "B" if index % 2 else "A"
+        counter.set_text("{}  --  swap {} / {}".format(name, index, swaps))
+        start = time.ticks_us()
+        lv.screen_load(target)
+        for _ in range(invalidate):
+            lv.screen_active().invalidate()
+        lv.refr_now(None)
+        times.append(time.ticks_diff(time.ticks_us(), start) / 1000.0)
+        time.sleep_ms(hold_ms)
+
+    print("")
+    print("swap timings in ms, in order:")
+    for index in range(0, len(times), 5):
+        chunk = times[index:index + 5]
+        print("  {:>2}-{:<2} {}".format(
+            index + 1, index + len(chunk),
+            "  ".join("{:6.1f}".format(t) for t in chunk)))
+    ordered = sorted(times)
+    median = ordered[len(ordered) // 2]
+    print("")
+    print("  fastest {:.1f}   median {:.1f}   slowest {:.1f}".format(
+        ordered[0], median, ordered[-1]))
+    slow = [i + 1 for i, t in enumerate(times) if t > median * 1.5]
+    print("  swaps over 1.5x the median: {}".format(slow if slow else "none"))
+    print("")
+    print("PROBE_DONE {} swaps".format(swaps))
+    print("")
+    print("This exit code means the probe RAN, not that the panel is clean.")
+    print("The finding is what the watcher saw: how many of the {} swaps"
+          .format(swaps))
+    print("left bands, and what the ruler said their height was.")
+
+
 def run():
     print("== UI hardware tests ==")
     print("bringing up the display")
