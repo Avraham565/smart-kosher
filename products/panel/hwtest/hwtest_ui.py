@@ -1267,6 +1267,15 @@ def probe_screen_transition_striping(swaps=20, hold_ms=1500, invalidate=0):
     """
     import time
 
+    # run() does these two lines before anything else, and this probe did not.
+    # Without them LVGL has no display registered, so the panel stays black and
+    # screen_load blocks -- which is exactly what happened twice: no rendering,
+    # mpremote waiting on a raw REPL that never answers, and an orphaned
+    # process holding the port with main.py still deleted. The symptom looked
+    # like a wedged board and was a missing initialiser.
+    display.init()
+    theme.load_fonts()
+
     print("== striping probe: {} swaps, {}ms apart ==".format(swaps, hold_ms))
     print("   quiet board: main.py is deleted by the runner, so no brain,")
     print("   no device poll and no scheduler are running.")
