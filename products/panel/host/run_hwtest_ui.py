@@ -68,20 +68,21 @@ PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
 RUN_TIMEOUT_S = 600
 
 
-def _run_probe(port, invalidate):
-    """Drive the striping probe instead of the suite. A person reads the panel.
+def _run_probe(port, call, hint):
+    """Drive one probe instead of the suite. A person reads the panel.
 
     Scored by PROBE_DONE rather than by suite_verdict, and the difference is
-    deliberate: this run has no pass or fail in it. The exit code says the
+    deliberate: these runs have no pass or fail in them. The exit code says the
     probe reached the end without the board dying, and nothing else. What was
     seen is the finding, and only a person can supply it.
+
+    One scorer for every probe, taking the call as an argument. A second copy
+    of "look for PROBE_DONE" is the same hand-maintained duplicate that has
+    already cost this project three false greens, and it would be a duplicate
+    of the *verdict* -- the one place a copy is worst.
     """
     lines = run_suite_on_device(
-        port,
-        "import hwtest_ui; hwtest_ui.probe_screen_transition_striping("
-        "invalidate={})".format(invalidate),
-        RUN_TIMEOUT_S,
-        hint="The probe died mid-run; the panel may be mid-transition.")
+        port, "import hwtest_ui; hwtest_ui." + call, RUN_TIMEOUT_S, hint=hint)
     if any(line.strip().startswith("PROBE_DONE") for line in lines):
         return 0
     print("!! the probe never reached the end -- nothing was measured")
@@ -109,7 +110,15 @@ def _run_suite(port, args=None):
     # Scored by what the suite printed, not by what mpremote returned: it
     # returns 0 either way (finding 44), so SystemExit here was decorative.
     if args is not None and args.probe_striping:
-        return _run_probe(port, args.invalidate)
+        return _run_probe(
+            port,
+            "probe_screen_transition_striping(invalidate={})".format(
+                args.invalidate),
+            "The probe died mid-run; the panel may be mid-transition.")
+    if args is not None and args.probe_home_press:
+        return _run_probe(
+            port, "probe_home_card_press()",
+            "The probe died mid-run; the card may be left pressed.")
     lines = run_suite_on_device(
         port, "import hwtest_ui; hwtest_ui.run()", RUN_TIMEOUT_S,
         hint="The last check printed above is the one it died on.")
@@ -121,9 +130,16 @@ def main():
     parser.add_argument("--port")
     parser.add_argument("--keep-repl", action="store_true",
                         help="leave main.py off (screen stays blank)")
-    parser.add_argument("--probe-striping", action="store_true",
+    # Mutually exclusive because each probe wants the whole panel to itself:
+    # asked for both, one would silently win and the run would report on an
+    # experiment nobody chose.
+    probes = parser.add_mutually_exclusive_group()
+    probes.add_argument("--probe-striping", action="store_true",
                         help="swap between two loaded screens and watch the "
                              "panel, instead of running the suite (task 47)")
+    probes.add_argument("--probe-home-press", action="store_true",
+                        help="press the real home card on a quiet board and "
+                             "watch it, instead of running the suite (task 48)")
     parser.add_argument("--invalidate", type=int, default=0,
                         help="with --probe-striping: invalidate the active "
                              "screen N times after each load")

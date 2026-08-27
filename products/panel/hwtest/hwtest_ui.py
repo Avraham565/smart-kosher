@@ -1330,6 +1330,273 @@ def probe_screen_transition_striping(swaps=20, hold_ms=1500, invalidate=0):
     print("left bands, and what the ruler said their height was.")
 
 
+
+def _rgb(color):
+    """(r, g, b) of an lv colour, or None if this binding will not say."""
+    try:
+        return color.red, color.green, color.blue
+    except Exception:
+        return None
+
+
+def _press_reactive(root):
+    """Every widget under `root` whose background changes under PRESSED.
+
+    The card is found by what it DOES, not by where it sits in the tree.
+    `scr.get_child(1).get_child(0)` names the hero today and would quietly name
+    something else the day a row is inserted above it -- and a probe pointed at
+    the wrong widget reports "no bands" with total confidence.
+
+    Asking which widgets react to a press is the same question the probe is
+    about, so the search doubles as the instrument check: an empty result means
+    nothing on this screen responds to a press at all, and that has to stop the
+    run rather than produce twenty measurements of nothing.
+    """
+    out = []
+
+    def walk(obj):
+        for index in range(obj.get_child_count()):
+            child = obj.get_child(index)
+            before = _rgb(child.get_style_bg_color(lv.PART.MAIN))
+            child.add_state(lv.STATE.PRESSED)
+            after = _rgb(child.get_style_bg_color(lv.PART.MAIN))
+            child.remove_state(lv.STATE.PRESSED)
+            if before != after:
+                out.append((child, _box(child), before, after))
+            walk(child)
+
+    walk(root)
+    return out
+
+
+def _press_ruler(parent, box, ink, pitch=10, major=50):
+    """A scale laid over the left edge of the card under test.
+
+    47's ruler runs down the far left of the glass. It cannot serve here: this
+    card starts 18px from that edge and runs 764px across, and sighting a
+    band's height across three quarters of the panel is not a measurement. So
+    the scale sits ON the card, which puts it inside the invalidated rectangle
+    and has it redrawn with it -- the cost is that the ruler stripes too, and
+    that is also the point, because a scale outside the redrawn area cannot say
+    where inside it a band fell.
+
+    Graduated in tens with a labelled tick every fifty, and the numbers are
+    offsets from the top of the card, not from the top of the screen. Round
+    numbers rather than the predicted seam pitch, deliberately: 50 rows is what
+    a flush-chunk seam would measure here (38400px of draw buffer over a 764px
+    wide area), and a ruler ruled in the prediction invites the eye to agree
+    with it. That the two coincide is said out loud instead of being hidden in
+    the tick spacing.
+    """
+    from widgets import w_label
+
+    x1, y1, _, y2 = box
+    column = lv.obj(parent)
+    column.set_size(58, y2 - y1 + 1)
+    column.set_style_bg_opa(lv.OPA.TRANSP, lv.PART.MAIN)
+    column.set_style_border_width(0, lv.PART.MAIN)
+    column.set_style_pad_all(0, lv.PART.MAIN)
+    column.remove_flag(lv.obj.FLAG.SCROLLABLE)
+
+    # set_pos is relative to the parent's CONTENT area, and `box` is absolute
+    # screen coordinates. Rather than assume the screen has no padding -- which
+    # would put every tick a few pixels off and make the scale lie by exactly
+    # the amount nobody would notice -- place it at the origin, read back where
+    # that landed, and correct by the difference. The caller prints tick 0's
+    # absolute position against the card's, so the correction is checked rather
+    # than trusted.
+    column.set_pos(0, 0)
+    parent.update_layout()
+    origin = _box(column)
+    column.set_pos(x1 - origin[0], y1 - origin[1])
+    parent.update_layout()
+
+    for y in range(0, y2 - y1 + 1, pitch):
+        tick = lv.obj(column)
+        tick.set_size(20 if y % major == 0 else 8, 2)
+        tick.set_pos(0, y)
+        tick.set_style_bg_color(ink, lv.PART.MAIN)
+        tick.set_style_border_width(0, lv.PART.MAIN)
+        tick.remove_flag(lv.obj.FLAG.SCROLLABLE)
+        if y % major == 0:
+            w_label(column, theme.FONTS.small, ink, str(y)).set_pos(24, y - 8)
+    return column
+
+
+def _spread(name, times):
+    """Print one series of timings the way task 47 printed its swaps."""
+    print("")
+    print("{} in ms, in order:".format(name))
+    for index in range(0, len(times), 5):
+        chunk = times[index:index + 5]
+        print("  {:>2}-{:<2} {}".format(
+            index + 1, index + len(chunk),
+            "  ".join("{:6.1f}".format(t) for t in chunk)))
+    ordered = sorted(times)
+    median = ordered[len(ordered) // 2]
+    print("  fastest {:.1f}   median {:.1f}   slowest {:.1f}".format(
+        ordered[0], median, ordered[-1]))
+    slow = [i + 1 for i, t in enumerate(times) if t > median * 1.5]
+    print("  over 1.5x the median: {}".format(slow if slow else "none"))
+
+
+def probe_home_card_press(presses=20, hold_ms=1200, rest_ms=700):
+    """Press the real home card on a quiet board, twenty times. A person watches.
+
+    Avraham, in passing while reading 47's result: pressing the house card on
+    the main screen ALWAYS rules it with lines like a notebook page. That is a
+    better lead than 42 on three counts -- it reproduces on demand rather than
+    sometimes, it is one widget and one interaction with no screen change in
+    it, and evenly spaced lines are geometry, where 42's bands wander.
+
+    So this is 47's experiment aimed at 48, separating the same way, by
+    subtraction: the runner has deleted main.py, so no brain, no device poll
+    and no scheduler are running while the card is pressed. Nothing but LVGL
+    can interrupt the redraw.
+
+      bands here     -> the partial redraw itself produces them, on a board
+                        with nothing else on it. Geometry is back, and the
+                        follow-up is to vary the invalidated WIDTH: the seam
+                        pitch is buffer-px over area-width, so a card half as
+                        wide must double the spacing. That is a prediction the
+                        eye can judge without measuring anything.
+      no bands here  -> the same answer 47 got, but from a symptom that
+                        reproduces every time instead of sometimes -- which
+                        makes the collision hypothesis testable on demand.
+
+    What this run subtracts BESIDES main.py, written before the result rather
+    than after it, because 47 had to record exactly this against itself:
+
+      * no real touch. The state is set from code, so the GT911 is never read
+        over I2C during the redraw and no indev processing runs.
+      * no click. The product's press is followed by pages.page_open, which
+        builds rooms_page on the first one; none of that happens here.
+      * no pump. lv.refr_now draws in one call, where the product renders from
+        lvgl_loop's timer_handler in between other tasks.
+
+    Any of those three could be the disturber. "No bands" here therefore
+    clears the redraw, not the product's press.
+    """
+    import time
+
+    # run() does these two first, and the probes that skipped them looked like
+    # dead boards: no display registered means nothing renders and the REPL
+    # never answers.
+    display.init()
+    theme.load_fonts()
+
+    import ui_home
+    from widgets import w_label
+
+    if _rgb(lv.color_hex(0)) is None:
+        print("!! this binding will not report style colours, so the card "
+              "cannot be identified by behaviour. It will not be guessed at.")
+        return
+
+    # None is the brain: the home screen only passes it on to sub-screens this
+    # probe never opens, and nothing here taps anything.
+    ui_home.create(None)
+    scr = lv.screen_active()
+    scr.update_layout()
+
+    candidates = _press_reactive(scr)
+    if not candidates:
+        print("!! nothing on the home screen changes colour when pressed. "
+              "Either the card lost its pressed style or this binding "
+              "resolves styles differently -- either way there is nothing "
+              "to measure, and twenty measurements of nothing is worse.")
+        return
+
+    print("== widgets that react to a press ==")
+    for _, box, before, after in candidates:
+        print("   {:>4},{:<4} .. {:>4},{:<4}   {:>4}x{:<4}  {} -> {}".format(
+            box[0], box[1], box[2], box[3],
+            box[2] - box[0] + 1, box[3] - box[1] + 1, before, after))
+
+    card, box, normal, pressed = max(
+        candidates, key=lambda c: (c[1][2] - c[1][0]) * (c[1][3] - c[1][1]))
+    width, height = box[2] - box[0] + 1, box[3] - box[1] + 1
+    if width < SCREEN_W // 2:
+        print("!! the widest press-reactive widget is only {}px across. The "
+              "hero card spans most of the screen, so this is not it, and "
+              "pressing the wrong widget would report 'no bands' with total "
+              "confidence.".format(width))
+        return
+
+    ruler = _press_ruler(scr, box, theme.TEXT)
+    counter = w_label(scr, theme.FONTS.body, theme.TEXT, "")
+    counter.align(lv.ALIGN.TOP_MID, 0, 8)
+    scr.update_layout()
+
+    pitch = 38400 // width
+    print("")
+    print("== the card under test ==")
+    print("   box     {},{} .. {},{}   {}x{}".format(
+        box[0], box[1], box[2], box[3], width, height))
+    print("   ruler   tick 0 lands at absolute y {}, card top is {}".format(
+        _box(ruler)[1], box[1]))
+    print("   bg      {} normal -> {} pressed".format(normal, pressed))
+    print("")
+    print("== written before the run ==")
+    print("   redraw  {}px is {}% of the screen and 47 measured a full".format(
+        width * height, 100 * width * height // (SCREEN_W * SCREEN_H)))
+    print("           repaint at 111.4ms, so expect roughly 20-60ms per")
+    print("           press. Over 100ms means the whole screen is being")
+    print("           repainted for a press, which is a finding of its own.")
+    print("           Under 5ms and uniform means nothing was drawn -- check")
+    print("           the probe before believing it.")
+    print("   bands   if these are seams between flushed chunks the pitch is")
+    print("           {}px (38400px of draw buffer over a {}px wide area)"
+          .format(pitch, width))
+    print("           and there are only {} of them. Note {}, NOT the 48 on"
+          .format((height - 1) // pitch, pitch))
+    print("           47's ruler: 48 is the pitch of a FULL-WIDTH area.")
+    print("           Many closely spaced lines are not this hypothesis.")
+    print("")
+    print("   WATCH THE PANEL. The press number is at the top; the scale down")
+    print("   the card's left edge is in 10px steps, labelled every 50.")
+    print("   Starting in 3 seconds.")
+    # The cold first paint happens here, outside the loop and outside the
+    # clock. In 47 it landed on swap 1 and showed up as a 151ms outlier among
+    # 111s; here press 1 is a press like the other nineteen, and the watcher
+    # sees the home screen through the countdown instead of a blank panel.
+    lv.refr_now(None)
+    time.sleep(3)
+
+    down, up = [], []
+    for index in range(1, presses + 1):
+        # Settled before the clock starts: the counter's own invalidated
+        # rectangle would otherwise be merged into the press redraw and charged
+        # to it. Nothing else is printed between presses -- console traffic
+        # over the serial link during a redraw is the kind of interruption
+        # under test, and an instrument that perturbs what it measures answers
+        # about itself.
+        counter.set_text("press {} / {}".format(index, presses))
+        lv.refr_now(None)
+
+        start = time.ticks_us()
+        card.add_state(lv.STATE.PRESSED)
+        lv.refr_now(None)
+        down.append(time.ticks_diff(time.ticks_us(), start) / 1000.0)
+        time.sleep_ms(hold_ms)
+
+        start = time.ticks_us()
+        card.remove_state(lv.STATE.PRESSED)
+        lv.refr_now(None)
+        up.append(time.ticks_diff(time.ticks_us(), start) / 1000.0)
+        time.sleep_ms(rest_ms)
+
+    _spread("press redraw", down)
+    _spread("release redraw", up)
+    print("")
+    print("PROBE_DONE {} presses".format(presses))
+    print("")
+    print("This exit code means the probe RAN, not that the card is clean.")
+    print("The finding is what the watcher saw: how many of the {} presses"
+          .format(presses))
+    print("ruled the card, whether the releases did it too, and what the")
+    print("scale said the spacing was.")
+
 def run():
     print("== UI hardware tests ==")
     print("bringing up the display")
