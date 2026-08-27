@@ -1,0 +1,158 @@
+diff --git a/ext_mod/lcd_bus/esp32_src/rgb_bus.c b/ext_mod/lcd_bus/esp32_src/rgb_bus.c
+index 03c0732..ea8b4bb 100644
+--- a/ext_mod/lcd_bus/esp32_src/rgb_bus.c
++++ b/ext_mod/lcd_bus/esp32_src/rgb_bus.c
+@@ -385,7 +385,31 @@
+         self->bytes_per_pixel = bpp / 8;
+ 
+         self->panel_io_config.flags.fb_in_psram = 1;
++        // TWO framebuffers, and this is what kills tearing: strips go into
++        // the idle buffer and esp_lcd switches to it at a frame boundary, so
++        // the panel never scans a buffer that is being written.
++        //
++        // Set to 0 on 2026-08-27 on the theory that the second buffer was
++        // what left bands on a pressed card. FALSIFIED: with one framebuffer
++        // the bands were unchanged. The real cause was an off-by-one in
++        // rotate0 (rgb_bus_rotation.c) that never wrote the last row of any
++        // partial-width strip. With that fixed the bands are gone, and one
++        // framebuffer bought nothing but a visible top-to-bottom tear.
++        //
++        // What it did buy, measured: without a second buffer the whole-frame
++        // resync memcpy below never runs, and a press went from ~87ms to
++        // ~40ms. That memcpy is real waste -- 768,000 bytes to repair a
++        // region that is usually a fraction of the screen -- but the answer
++        // is to copy only the region that changed, not to drop the buffer.
+         self->panel_io_config.flags.double_fb = 1;
++        // Mirror the stable C panel firmware: enable esp_lcd bounce
++        // buffers so the LCD scans from internal SRAM (refilled from
++        // PSRAM) instead of reading the framebuffer straight out of
++        // PSRAM. This is the real fix for scanout jitter; it pairs with
++        // the 64B data cache line + SPIRAM XIP now set in sdkconfig.
++        // 10 lines = 800*10*2 = 16KB x2 internal SRAM (matches C).
++        self->panel_io_config.bounce_buffer_size_px =
++            (size_t)(self->width * 10);
+ 
+         rgb_bus_lock_init(&self->copy_lock);
+         rgb_bus_lock_init(&self->tx_color_lock);
+diff --git a/ext_mod/lcd_bus/esp32_src/rgb_bus_rotation.c b/ext_mod/lcd_bus/esp32_src/rgb_bus_rotation.c
+index efb8ae0..137b6c5 100644
+--- a/ext_mod/lcd_bus/esp32_src/rgb_bus_rotation.c
++++ b/ext_mod/lcd_bus/esp32_src/rgb_bus_rotation.c
+@@ -204,11 +204,29 @@
+         rgb_panel_t *rgb_panel = __containerof((esp_lcd_panel_t *)self->panel_handle, rgb_panel_t, base);
+ 
+         self->active_fb = rgb_panel->fbs[0];
+-        self->idle_fb = rgb_panel->fbs[1];
++        // fbs[1] exists only when double_fb is set. Reading it with a single
++        // framebuffer hands the copy task a pointer to nothing and the board
++        // dies in Guru Meditation LoadProhibited on the first flush.
++        self->idle_fb = rgb_panel->fbs[rgb_panel->num_fbs > 1 ? 1 : 0];
+ 
+         uint8_t *idle_fb;
+         bool last_update;
+ 
++        // Bounding box, in destination pixels, of everything written into the
++        // idle buffer since the last present. After the buffers swap, only
++        // this much of the newly-idle buffer is out of date -- the rest was
++        // already brought level by the previous swap -- so only this much has
++        // to be copied back. The full-frame memcpy it replaces moved 768,000
++        // bytes to repair a card press that dirties 261,000, and it cost a
++        // measured 42-47ms on every redraw that followed another.
++        //
++        // Rotation 0 only. The rotated paths write transposed coordinates, so
++        // the box in source terms is not the box in destination terms, and a
++        // wrong box here is a stale strip on the glass. They fall back.
++        uint32_t dirty_x1 = 0xFFFFFFFFu, dirty_y1 = 0xFFFFFFFFu;
++        uint32_t dirty_x2 = 0, dirty_y2 = 0;
++        bool dirty_exact = true;
++
+         uint8_t bytes_per_pixel = self->bytes_per_pixel;
+         rgb_bus_lock_acquire(&self->copy_lock, -1);
+ 
+@@ -231,6 +249,17 @@
+                 self->width, self->height,
+                 bytes_per_pixel, self->rotation, self->rgb565_dither);
+ 
++            // Read before the lock is released: tx_color overwrites these
++            // the moment it can publish the next strip.
++            if (self->rotation == RGB_BUS_ROTATION_0) {
++                if (self->x_start < dirty_x1) dirty_x1 = self->x_start;
++                if (self->y_start < dirty_y1) dirty_y1 = self->y_start;
++                if (self->x_end > dirty_x2) dirty_x2 = self->x_end;
++                if (self->y_end > dirty_y2) dirty_y2 = self->y_end;
++            } else {
++                dirty_exact = false;
++            }
++
+             rgb_bus_lock_release(&self->tx_color_lock);
+ 
+             if (self->callback != mp_const_none) {
+@@ -263,7 +292,12 @@
+                 mp_thread_set_state(old_state);
+             }
+ 
+-            if (last_update) {
++            // With one framebuffer copy_pixels has already written into the
++            // buffer being scanned out, so there is nothing to present and
++            // nothing to resync -- and the wait below would never return,
++            // because the vsync handler only signals swap_bufs when the
++            // panel switches buffers, which it can no longer do.
++            if (last_update && self->idle_fb != self->active_fb) {
+                 mp_lcd_err_t ret = esp_lcd_panel_draw_bitmap(
+                     self->panel_handle,
+                     0,
+@@ -278,7 +312,29 @@
+                 } else {
+                     rgb_bus_event_clear(&self->swap_bufs);
+                     rgb_bus_event_wait(&self->swap_bufs);
+-                    memcpy(self->idle_fb, self->active_fb, self->width * self->height * bytes_per_pixel);
++
++                    if (dirty_exact && dirty_x1 <= dirty_x2 && dirty_y1 <= dirty_y2) {
++                        if (dirty_x2 >= self->width) dirty_x2 = self->width - 1;
++                        if (dirty_y2 >= self->height) dirty_y2 = self->height - 1;
++                        uint32_t line = self->width * bytes_per_pixel;
++                        uint32_t span = (dirty_x2 - dirty_x1 + 1) * bytes_per_pixel;
++                        uint32_t off = (dirty_y1 * self->width + dirty_x1) * bytes_per_pixel;
++                        uint8_t *src_row = self->active_fb + off;
++                        uint8_t *dst_row = self->idle_fb + off;
++                        for (uint32_t y = dirty_y1; y <= dirty_y2; y++) {
++                            memcpy(dst_row, src_row, span);
++                            src_row += line;
++                            dst_row += line;
++                        }
++                    } else {
++                        memcpy(self->idle_fb, self->active_fb, self->width * self->height * bytes_per_pixel);
++                    }
++
++                    dirty_x1 = 0xFFFFFFFFu;
++                    dirty_y1 = 0xFFFFFFFFu;
++                    dirty_x2 = 0;
++                    dirty_y2 = 0;
++                    dirty_exact = true;
+                 }
+             }
+ 
+@@ -371,7 +427,22 @@
+                     src += src_bytes_per_line;
+                 }
+             } else {
+-                for(uint32_t y = y_start; y < y_end; y++) {
++                // y_end is INCLUSIVE -- it is LVGL's area.y2. Looping y <
++                // y_end copies one row too few, so the last row of every
++                // flushed strip is never written and keeps whatever the
++                // framebuffer already held. On a full-width area the fast
++                // path above is taken and is correct (it uses +1), which is
++                // why whole-screen redraws are clean and only partial-width
++                // ones -- a card, a button -- show bands, one per strip
++                // boundary, spaced at 38400/width rows. Measured on the panel
++                // 2026-08-27: halving the card's width doubled the spacing
++                // and halved the count, exactly as that arithmetic predicts.
++                //
++                // The rotated branches in copy_pixels already carry the
++                // fix: copy_pixels does y_end += 1 before calling them, with
++                // the comment "removes black lines between blocks".
++                // Rotation 0 never got it.
++                for(uint32_t y = y_start; y <= y_end; y++) {
+                     memcpy(dst, src, src_bytes_per_line);
+                     dst += dst_bytes_per_line;
+                     src += src_bytes_per_line;

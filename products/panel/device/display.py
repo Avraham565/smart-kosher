@@ -47,6 +47,25 @@ _W, _H = 800, 480
 # re-initialising the peripheral.
 i2c = None
 
+# The GT911 driver, published for the same reason: reaching the touch
+# controller's own configuration (sensitivity thresholds) goes through this
+# object, and nothing else on the board has a handle to it.
+touch = None
+
+# How often LVGL samples the touch panel, in ms.
+#
+# lv_conf.h leaves this at LV_DEF_REFR_PERIOD = 33, and a tap costs TWO
+# samples, not one: LVGL reports a click on release, so up to 33ms to notice
+# the finger land and up to 33ms more to notice it lift -- ~66ms before the
+# handler runs at all. That is more than the whole 47ms saved off a card
+# redraw, and it is why the redraw work did not make taps feel faster.
+#
+# 10ms rather than lower because the pump services LVGL every ~10ms
+# (lvgl_loop.py, measured at 99.6 cycles/s): a timer cannot fire more often
+# than the handler that runs it, so asking for 5 would buy nothing and would
+# only put more I2C traffic next to the rendering.
+TOUCH_SAMPLE_MS = 10
+
 
 def _backlight_on(i2c):
     # STC8H1K28 expander (TCA9534-style): reg 3 = config (0x00 -> all outputs),
@@ -55,7 +74,32 @@ def _backlight_on(i2c):
     i2c.writeto_mem(_BL_ADDR, 1, bytes([1 << _BL_BIT]))
 
 
-def _init_panel():
+def _one_draw_buffer(bus):
+    """Allocate a single LVGL draw buffer, so the driver does not make two.
+
+    Left to itself the framework allocates a PAIR (~1/10 screen each) and LVGL
+    alternates: render strip N into A, hand A to the copy task, render N+1 into
+    B while A is still being copied. That pipelining is the reason the pair
+    exists -- and it is also a second place the picture lives while a redraw is
+    in flight, which is what this is here to test.
+
+    Same size and the same fallback chain the framework uses, so the only thing
+    that differs is HOW MANY. A test that also changed the size or the memory
+    class would not be testing the count.
+    """
+    size = _W * _H * 2 // 10          # RGB565, ~1/10 screen, as the driver does
+    for flags in (lcd_bus.MEMORY_INTERNAL | lcd_bus.MEMORY_DMA,
+                  lcd_bus.MEMORY_SPIRAM | lcd_bus.MEMORY_DMA,
+                  lcd_bus.MEMORY_INTERNAL,
+                  lcd_bus.MEMORY_SPIRAM):
+        try:
+            return bus.allocate_framebuffer(size, flags)
+        except MemoryError:
+            continue
+    raise MemoryError("no room for a single {} byte draw buffer".format(size))
+
+
+def _init_panel(single_draw_buffer=False):
     p = _RGB_DATA
     bus = lcd_bus.RGBBus(
         hsync=_HSYNC, vsync=_VSYNC, de=_DE, pclk=_PCLK,
@@ -78,6 +122,10 @@ def _init_panel():
     disp = rgb_display.RGBDisplay(
         data_bus=bus,
         display_width=_W, display_height=_H,
+        # Passing one makes the framework skip its own allocation entirely, so
+        # frame_buffer2 stays None and LVGL is handed a single draw buffer.
+        # None here is the historical path: the driver allocates the pair.
+        frame_buffer1=_one_draw_buffer(bus) if single_draw_buffer else None,
         color_space=lv.COLOR_FORMAT.RGB565,
         rgb565_byte_swap=False,
     )
@@ -100,19 +148,42 @@ class _I2CWrapper:
         self._i2c.readfrom_into(self._addr, rx)
 
 
-def init():
+def init(single_draw_buffer=False):
     """Backlight + RGB panel + GT911 touch. Returns the lv.display. Touch
     failure is non-fatal (UI still renders) so it never blocks the drift test.
-    Publishes the I2C bus as ``display.i2c`` for the RTC adapter to reuse."""
+    Publishes the I2C bus as ``display.i2c`` for the RTC adapter to reuse.
+
+    ``single_draw_buffer`` is under investigation and defaults to the behaviour
+    the product has always had. See _one_draw_buffer.
+    """
     global i2c
     i2c = I2C(0, sda=Pin(_I2C_SDA), scl=Pin(_I2C_SCL), freq=400_000)
     _backlight_on(i2c)
-    disp = _init_panel()
+    disp = _init_panel(single_draw_buffer)
+    global touch
     try:
         import gt911
-        gt911.GT911(device=_I2CWrapper(i2c, _TOUCH_ADDR), reset_pin=None,
-                    interrupt_pin=None, startup_rotation=lv.DISPLAY_ROTATION._0)
-        print("touch OK")
+        touch = gt911.GT911(
+            device=_I2CWrapper(i2c, _TOUCH_ADDR), reset_pin=None,
+            interrupt_pin=None, startup_rotation=lv.DISPLAY_ROTATION._0)
+        print("touch OK, sampling every {}ms".format(_sample_touch(touch)))
     except Exception as exc:
         print("touch init skipped:", exc)
     return disp
+
+
+def _sample_touch(driver):
+    """Set how often LVGL reads the touch panel. Returns the period in force.
+
+    Returns rather than assumes: if this binding names the read timer
+    something else, the period is still whatever LVGL defaulted to, and a boot
+    line saying 10 when it is 33 would be a lie that nobody could catch from
+    the outside. Failing to retune is not fatal -- the panel works at 33ms,
+    it just answers more slowly -- so this reports instead of raising.
+    """
+    timer = getattr(driver._indev_drv, "get_read_timer", None)
+    if timer is None:
+        return "?, this binding has no get_read_timer"
+    timer = timer()
+    timer.set_period(TOUCH_SAMPLE_MS)
+    return TOUCH_SAMPLE_MS

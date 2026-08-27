@@ -1440,7 +1440,8 @@ def _spread(name, times):
     print("  over 1.5x the median: {}".format(slow if slow else "none"))
 
 
-def probe_home_card_press(presses=20, hold_ms=1200, rest_ms=700):
+def probe_home_card_press(presses=20, hold_ms=1200, rest_ms=700,
+                          single_draw_buffer=False, mode="draws"):
     """Press the real home card on a quiet board, twenty times. A person watches.
 
     Avraham, in passing while reading 47's result: pressing the house card on
@@ -1482,8 +1483,20 @@ def probe_home_card_press(presses=20, hold_ms=1200, rest_ms=700):
     # run() does these two first, and the probes that skipped them looked like
     # dead boards: no display registered means nothing renders and the REPL
     # never answers.
-    display.init()
+    disp = display.init(single_draw_buffer)
     theme.load_fonts()
+
+    # Reported rather than assumed. A probe that changes a configuration and
+    # does not say what the configuration ended up being leaves the reader
+    # inferring it from a 3ms shift in the timings -- and the run that first
+    # used this flag could only be believed that way.
+    print("== LVGL draw buffers ==")
+    for name in ("_frame_buffer1", "_frame_buffer2"):
+        buf = getattr(disp, name, None)
+        print("   {:<16} {}".format(
+            name, "None" if buf is None else "{} bytes".format(len(buf))))
+    print("   asked for one: {}".format(single_draw_buffer))
+    print("")
 
     import ui_home
     from widgets import w_label
@@ -1553,8 +1566,51 @@ def probe_home_card_press(presses=20, hold_ms=1200, rest_ms=700):
     print("           47's ruler: 48 is the pitch of a FULL-WIDTH area.")
     print("           Many closely spaced lines are not this hypothesis.")
     print("")
-    print("   WATCH THE PANEL. The press number is at the top; the scale down")
-    print("   the card's left edge is in 10px steps, labelled every 50.")
+    print("")
+    print("== the experiment: odd presses draw once, even presses twice ==")
+    print("   Avraham reports bands only on LARGE buttons, at constant")
+    print("   spacing, and a line that can survive into the NEXT screen. A")
+    print("   redraw cannot leave anything on a screen it did not draw, so")
+    print("   the picture has to be kept in two places -- and display.py says")
+    print("   it is: two full framebuffers with partial renders copied in.")
+    print("   Four strips over two buffers gives each of them half the")
+    print("   strips, which is bands at a constant pitch, and a small button")
+    print("   fits in one strip, which is why it never shows them.")
+    print("")
+    print("   Drawing the same area twice puts it in BOTH buffers. So:")
+    print("     even presses clean, odd ones banded -> two buffers, and the")
+    print("       fix is decided by measurement rather than guessed at.")
+    print("     both banded -> the story is wrong and nothing was touched.")
+    print("")
+    print("   The instrument check is in the timings: a DOUBLE press must")
+    print("   cost about twice a single one. If the two come out equal, the")
+    print("   second pass drew nothing and this run means nothing -- read")
+    print("   that before reading the panel.")
+    if mode == "width":
+        print("")
+        print("== THIS RUN VARIES THE WIDTH, NOT THE NUMBER OF DRAWS ==")
+        print("   Both variants draw exactly once. Odd presses use the card")
+        print("   at its full {}px; even presses halve it to {}px.".format(
+            width, width // 2))
+        print("")
+        print("   If bands are seams between flushed strips, the pitch is")
+        print("   38400 / area width, so:")
+        print("     {:>4}px wide -> {:>3} row strips -> {} seams".format(
+            width, 38400 // width, (height - 1) // (38400 // width)))
+        print("     {:>4}px wide -> {:>3} row strips -> {} seams".format(
+            width // 2, 38400 // (width // 2),
+            (height - 1) // (38400 // (width // 2))))
+        print("")
+        print("   So the narrow card must show FEWER bands, FURTHER apart.")
+        print("   Same count and same spacing on both means the pitch does")
+        print("   not come from the strips at all, and the whole flush-seam")
+        print("   story is out -- which is the cheap answer this should have")
+        print("   been asked for before any firmware was built.")
+
+    print("")
+    print("   WATCH THE PANEL. The press number is at the top and says which")
+    print("   kind it is; the scale down the card's left edge is in 10px")
+    print("   steps, labelled every 50.")
     print("   Starting in 3 seconds.")
     # The cold first paint happens here, outside the loop and outside the
     # clock. In 47 it landed on swap 1 and showed up as a 151ms outlier among
@@ -1565,37 +1621,353 @@ def probe_home_card_press(presses=20, hold_ms=1200, rest_ms=700):
 
     down, up = [], []
     for index in range(1, presses + 1):
+        # Odd presses draw the card once, even presses draw it twice. Paired
+        # INSIDE one run rather than across two runs: the eye compares banded
+        # against clean back to back, seconds apart, on the same board in the
+        # same state -- and "the board was in a different mood today" stops
+        # being an available explanation.
+        passes = 2 if index % 2 == 0 else 1
+        label = "DOUBLE draw" if passes > 1 else "single draw"
+
+        if mode == "width":
+            # The other question the same rig can ask, and the one that should
+            # have been asked first. If bands are seams between flushed strips
+            # then their pitch is buffer-px over area WIDTH -- so halving the
+            # width must double the spacing and halve the count. That is a
+            # prediction only this hypothesis makes, and the eye judges it
+            # without measuring anything: fewer bands, further apart.
+            #
+            # Nothing else about the card changes, and both variants draw once.
+            passes = 1
+            narrow = index % 2 == 0
+            card.set_width(width // 2 if narrow else width)
+            label = "NARROW {}px".format(width // 2 if narrow else width)
+            scr.update_layout()
+            lv.refr_now(None)
+
         # Settled before the clock starts: the counter's own invalidated
         # rectangle would otherwise be merged into the press redraw and charged
         # to it. Nothing else is printed between presses -- console traffic
         # over the serial link during a redraw is the kind of interruption
         # under test, and an instrument that perturbs what it measures answers
         # about itself.
-        counter.set_text("press {} / {}".format(index, presses))
+        counter.set_text("press {} / {}    {}".format(
+            index, presses, label))
         lv.refr_now(None)
 
         start = time.ticks_us()
         card.add_state(lv.STATE.PRESSED)
         lv.refr_now(None)
+        for _ in range(passes - 1):
+            card.invalidate()
+            lv.refr_now(None)
         down.append(time.ticks_diff(time.ticks_us(), start) / 1000.0)
         time.sleep_ms(hold_ms)
 
         start = time.ticks_us()
         card.remove_state(lv.STATE.PRESSED)
         lv.refr_now(None)
+        for _ in range(passes - 1):
+            card.invalidate()
+            lv.refr_now(None)
         up.append(time.ticks_diff(time.ticks_us(), start) / 1000.0)
         time.sleep_ms(rest_ms)
 
-    _spread("press redraw", down)
-    _spread("release redraw", up)
+    # Index 1 is odd and sits at list position 0, so the even slice is the
+    # varied one.
+    other = "NARROW" if mode == "width" else "DOUBLE"
+    _spread("press,   plain  ", down[0::2])
+    _spread("press,   " + other, down[1::2])
+    _spread("release, plain  ", up[0::2])
+    _spread("release, " + other, up[1::2])
     print("")
     print("PROBE_DONE {} presses".format(presses))
     print("")
     print("This exit code means the probe RAN, not that the card is clean.")
-    print("The finding is what the watcher saw: how many of the {} presses"
-          .format(presses))
-    print("ruled the card, whether the releases did it too, and what the")
-    print("scale said the spacing was.")
+    print("The finding is what the watcher saw: whether the ODD presses")
+    print("(single draw) ruled the card while the EVEN ones (double) came")
+    print("out clean, and what the scale said the spacing was.")
+
+
+def _heap_free():
+    """(total free bytes, regions) across the IDF data heap, or None.
+
+    esp32.idf_heap_info sees what gc.mem_free() cannot: the framebuffers are
+    allocated by esp_lcd in C and never touch MicroPython's heap, so watching
+    the IDF allocator is the only way to count them from up here. Reading the
+    accounting collects nothing -- it is *forcing* a collection that is banned
+    once rendering has started, and nothing here has rendered yet.
+    """
+    try:
+        import esp32
+        regions = esp32.idf_heap_info(esp32.HEAP_DATA)
+    except Exception as exc:
+        print("   (esp32.idf_heap_info unavailable: {})".format(exc))
+        return None
+    return sum(region[1] for region in regions), regions
+
+
+def _knobs(obj, label):
+    """Print the buffer-shaped attributes an object carries. Reads only."""
+    print("   {}:".format(label))
+    found = 0
+    for name in sorted(dir(obj)):
+        low = name.lower()
+        if not any(word in low for word in
+                   ("buf", "fb", "frame", "render", "mode", "bounce")):
+            continue
+        found += 1
+        try:
+            value = getattr(obj, name)
+        except Exception as exc:
+            print("      {:<30} (unreadable: {})".format(name, exc))
+            continue
+        if isinstance(value, (int, bool)) or value is None:
+            print("      {:<30} {}".format(name, value))
+        else:
+            try:
+                print("      {:<30} {} of {}".format(
+                    name, type(value).__name__, len(value)))
+            except TypeError:
+                print("      {:<30} {}".format(name, type(value).__name__))
+    if not found:
+        print("      (none)")
+
+
+def probe_display_buffers():
+    """Count the buffers the RGB driver allocates on the FLASHED firmware.
+
+    Task 48 proved the mechanism by experiment: the panel shows content the
+    current render did not produce, and drawing the same area again supplies
+    it. Reading lvgl_micropython's source then named the cause -- rgb_bus.c
+    sets `double_fb = 1`, so esp_lcd keeps two full framebuffers and the copy
+    task resyncs the idle one with a whole-framebuffer memcpy after every
+    refresh.
+
+    Source is not firmware. This project has already been bitten by a flashed
+    binary that was not the one on disk, and the whole argument rests on that
+    flag being set in what is actually running. So it gets counted, not
+    assumed.
+
+    Written before the run -- one 800x480 RGB565 framebuffer is 768,000 bytes:
+
+      ~1.72MB  two framebuffers (1,536,000) plus LVGL's two partial draw
+               buffers (2 x 76,800) plus the bounce pair (2 x 16,000).
+               The flashed firmware matches the source and 48 stands.
+      ~0.95MB  ONE framebuffer. The source on disk is not what is running,
+               and the explanation needs rewriting even though the
+               experimental result does not.
+      no drop  the allocation does not come from this heap and this probe
+               answered nothing. Say that, do not reason around it.
+
+    Nothing here writes, resizes or reconfigures. The panel comes up exactly
+    as the product brings it up -- a count taken against a different
+    configuration is a count of something else.
+    """
+    print("== display buffers: what the flashed firmware allocates ==")
+    print("   one 800x480 RGB565 framebuffer = 768,000 bytes.")
+    print("   expected ~1,721,600 for two of them + LVGL's two partial")
+    print("   draw buffers (76,800 each) + the bounce pair (16,000 each).")
+    print("")
+
+    before = _heap_free()
+    if before is None:
+        print("!! no heap accounting on this build, so nothing can be "
+              "counted. Not inferring it from the driver source.")
+        return
+    print("   free before display.init():  {:>10}".format(before[0]))
+
+    disp = display.init()
+
+    after = _heap_free()
+    print("   free after  display.init():  {:>10}".format(after[0]))
+    spent = before[0] - after[0]
+    print("")
+    print("   consumed by bring-up:        {:>10} bytes".format(spent))
+    print("   = {:.2f} full framebuffers' worth".format(spent / 768000.0))
+    print("")
+    print("   per region, free before -> after (only those that moved):")
+    for index in range(min(len(before[1]), len(after[1]))):
+        was, now = before[1][index][1], after[1][index][1]
+        if was != now:
+            print("      region {:<2} {:>10} -> {:>10}   ({:+d})".format(
+                index, was, now, now - was))
+
+    print("")
+    print("== what the driver is willing to be told ==")
+    _knobs(disp, "the display object")
+    bus = getattr(disp, "_data_bus", None)
+    if bus is None:
+        print("   the bus object: not reachable from the display")
+    else:
+        _knobs(bus, "the bus object")
+
+    print("")
+    print("PROBE_DONE display buffers")
+    print("")
+    print("This exit code means the probe RAN. The finding is the byte count")
+    print("above: whether the firmware on this board really keeps two full")
+    print("framebuffers, which is what task 48's explanation rests on.")
+
+
+
+def probe_touch(press_level=None, leave_level=None,
+                shake_count=None, refresh_rate=None):
+    """Report the touch controller's configuration. Writes only when told to.
+
+    Two different complaints hide under "the touch is not sensitive enough",
+    and they have different knobs:
+
+      taps that are missed      -> the GT911's own press/leave thresholds, in
+                                   the controller's config registers
+      taps that land late       -> how often LVGL samples the panel, which is
+                                   an LVGL timer and nothing to do with the
+                                   controller
+
+    Both are reported here. Reading first is the point: a threshold set from a
+    guess is a number with no baseline, and if it turns out worse there is
+    nothing to go back to. The current values ARE the thing to go back to, so
+    they get printed before anything is written.
+
+    Passing press_level/leave_level writes them. That write goes to the
+    controller's own flash and survives power-off and reflashing -- it is not
+    in this repo and nothing here can see it later, which is exactly why the
+    run prints what it changed FROM. The GT911's config flash has a limited
+    number of write cycles, so this is a deliberate, occasional act, never a
+    loop and never a default.
+    """
+    display.init()
+    theme.load_fonts()
+
+    if display.touch is None:
+        print("!! the touch driver did not come up, so there is nothing to "
+              "report and nothing to tune.")
+        return
+
+    print("== how often LVGL samples the panel ==")
+    getter = getattr(display.touch._indev_drv, "get_read_timer", None)
+    if getter is None:
+        print("   this binding has no get_read_timer; the period is whatever")
+        print("   lv_conf.h set (LV_DEF_REFR_PERIOD, 33ms) and display.py's")
+        print("   retune silently did nothing.")
+    else:
+        # lv_timer_t exposes the period as a struct field, not a getter --
+        # get_period does not exist in this binding. Read back rather than
+        # trust: display.init() has already set it, and a probe that prints
+        # what it asked for instead of what took effect is the false green
+        # this file exists to avoid.
+        timer = getter()
+        period = getattr(timer, "period", None)
+        print("   read timer period: {}   (display.TOUCH_SAMPLE_MS = {})"
+              .format("unreadable in this binding" if period is None
+                      else "{}ms".format(period), display.TOUCH_SAMPLE_MS))
+        print("   a tap costs two samples -- one to see it land, one to see")
+        print("   it lift -- because LVGL reports the click on release.")
+
+    print("")
+    print("== the controller's own thresholds ==")
+    try:
+        # A property in this driver, not a method -- calling it returns the
+        # extension and then tries to call the extension.
+        config = display.touch.firmware_config
+        if callable(config):
+            config = config()
+    except Exception as exc:
+        print("   unavailable: {}".format(exc))
+        print("   gt911_extension.py has to be on the board for this; the")
+        print("   runner uploads it from products/panel/host/vendor/.")
+        print("")
+        print("PROBE_DONE touch")
+        return
+
+    for name in ("touch_press_level", "touch_leave_level", "noise_reduction"):
+        print("   {:<20} {}".format(name, getattr(config, name)))
+
+    # Read straight out of the config block, because these three are where the
+    # LATENCY lives and the extension exposes none of them. Offsets are from
+    # 0x8047; Goodix's own table:
+    #   0x804F Shake_Count   de-jitter counts, one nibble for release and one
+    #                        for press -- how many consecutive scans the
+    #                        controller must agree on before it reports
+    #   0x8050 Filter        First_Filter | Normal_Filter, coordinate
+    #                        smoothing, coefficient 4
+    #   0x8056 Refresh_Rate  "Coordinates report period: 5+N ms"
+    #
+    # So the delay before a press is seen is roughly
+    #   press de-jitter count x (5 + Refresh_Rate) ms
+    # and the delay before the release is seen -- which is when LVGL fires the
+    # click -- is the release count times the same period.
+    raw = config._config_data
+    shake, filt, refresh = raw[0x08], raw[0x09], raw[0x0F]
+    period = 5 + refresh
+    print("")
+    print("   {:<20} 0x{:02X}  ({} and {} scans)".format(
+        "shake_count", shake, shake >> 4, shake & 0x0F))
+    print("   {:<20} 0x{:02X}  (first {}, normal {})".format(
+        "filter", filt, filt >> 4, filt & 0x0F))
+    print("   {:<20} {}    -> report period {}ms".format(
+        "refresh_rate", refresh, period))
+    print("")
+    print("   so the controller alone costs about {}ms to confirm one edge"
+          .format((shake >> 4) * period))
+    print("   and {}ms for the other, before LVGL has sampled anything."
+          .format((shake & 0x0F) * period))
+    print("")
+    print("   press_level is how much signal counts as a finger landing:")
+    print("   LOWER is more sensitive. leave_level is when it counts as")
+    print("   lifted, and it must stay BELOW press_level or the controller")
+    print("   chatters between the two.")
+
+    wanted = (press_level, leave_level, shake_count, refresh_rate)
+    if all(value is None for value in wanted):
+        print("")
+        print("   Nothing written. Pass any of press_level, leave_level,")
+        print("   shake_count or refresh_rate to change it.")
+        print("")
+        print("PROBE_DONE touch")
+        return
+
+    was = (config.touch_press_level, config.touch_leave_level, shake, refresh)
+    if press_level is not None:
+        config.touch_press_level = press_level
+    if leave_level is not None:
+        config.touch_leave_level = leave_level
+    # Straight into the config block: the extension has no property for
+    # either, and these two are where the latency is.
+    if shake_count is not None:
+        raw[0x08] = shake_count & 0xFF
+    if refresh_rate is not None:
+        raw[0x0F] = refresh_rate & 0xFF
+    now = (config.touch_press_level, config.touch_leave_level,
+           raw[0x08], raw[0x0F])
+
+    if now[1] >= now[0]:
+        print("")
+        print("!! leave_level {} is not below press_level {}. The controller "
+              "would chatter between pressed and released in the middle of a "
+              "steady touch; refusing to write.".format(now[1], now[0]))
+        print("")
+        print("PROBE_DONE touch")
+        return
+
+    print("")
+    print("== writing ==")
+    for name, before, after in zip(
+            ("press_level", "leave_level", "shake_count", "refresh_rate"),
+            was, now):
+        print("   {:<14} {:>4} -> {}{}".format(
+            name, before, after, "" if before != after else "   (unchanged)"))
+    print("")
+    print("   The values on the LEFT are the way back. They live in the")
+    print("   controller's own flash -- they survive power-off, a reflash and")
+    print("   --erase-all, and nothing in this repo can see them. Write them")
+    print("   down; that flash also has a limited number of write cycles, so")
+    print("   this is not a knob to turn in a loop.")
+    config.save()
+    print("   saved.")
+
+    print("")
+    print("PROBE_DONE touch")
 
 def run():
     print("== UI hardware tests ==")

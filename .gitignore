@@ -30,8 +30,13 @@ dev_data/
 tests/.tmp-storage/
 tests/.tmp-*/
 
-# External/vendor checkouts
-lvgl_micropython/
+# External/vendor checkouts. Anchored: this is for a clone dropped at the repo
+# root, and unanchored it also swallowed
+# products/panel/firmware/lvgl_micropython/ -- the patches that make the panel's
+# firmware what it is. A directory exclusion cannot be undone by a later
+# negation, because git never descends into it to see one, so the rule has to
+# say where it means.
+/lvgl_micropython/
 
 # Hardware and firmware build artifacts
 firmware/h2_coordinator/build/

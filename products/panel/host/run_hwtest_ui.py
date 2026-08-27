@@ -117,8 +117,33 @@ def _run_suite(port, args=None):
             "The probe died mid-run; the panel may be mid-transition.")
     if args is not None and args.probe_home_press:
         return _run_probe(
-            port, "probe_home_card_press()",
+            port,
+            "probe_home_card_press(single_draw_buffer={}, mode={!r})".format(
+                bool(args.single_draw_buffer),
+                "width" if args.vary_width else "draws"),
             "The probe died mid-run; the card may be left pressed.")
+    if args is not None and args.probe_touch:
+        # Uploaded here and not in PAYLOAD on purpose. PAYLOAD is the suite's
+        # closure over products/panel/device -- the product -- and this is an
+        # upstream bench tool that the product never imports. See
+        # host/vendor/README.md.
+        vendor = os.path.join(HERE, "vendor", "gt911_extension.py")
+        if mpremote(port, "cp", vendor, ":gt911_extension.py") != 0:
+            print("!! could not upload gt911_extension.py; the controller's "
+                  "own thresholds cannot be read")
+            return 1
+        return _run_probe(
+            port,
+            "probe_touch(press_level={}, leave_level={}, shake_count={}, "
+            "refresh_rate={})".format(
+                args.press_level, args.leave_level,
+                args.shake_count, args.refresh_rate),
+            "The probe died; if it was mid-save the controller config may be "
+            "half written -- re-run to read it back before changing anything.")
+    if args is not None and args.probe_display_buffers:
+        return _run_probe(
+            port, "probe_display_buffers()",
+            "The probe died during display.init(); nothing was counted.")
     lines = run_suite_on_device(
         port, "import hwtest_ui; hwtest_ui.run()", RUN_TIMEOUT_S,
         hint="The last check printed above is the one it died on.")
@@ -140,6 +165,33 @@ def main():
     probes.add_argument("--probe-home-press", action="store_true",
                         help="press the real home card on a quiet board and "
                              "watch it, instead of running the suite (task 48)")
+    probes.add_argument("--probe-display-buffers", action="store_true",
+                        help="count the buffers the flashed RGB driver "
+                             "allocates, instead of running the suite")
+    probes.add_argument("--probe-touch", action="store_true",
+                        help="report the touch controller's sampling rate and "
+                             "sensitivity thresholds, instead of the suite")
+    parser.add_argument("--press-level", type=int, default=None,
+                        help="with --probe-touch: WRITE this press threshold "
+                             "to the controller's flash (lower = more "
+                             "sensitive). Read the current one first")
+    parser.add_argument("--leave-level", type=int, default=None,
+                        help="with --probe-touch: WRITE this release "
+                             "threshold. Must stay below --press-level")
+    parser.add_argument("--shake-count", type=int, default=None,
+                        help="with --probe-touch: WRITE the de-jitter counts "
+                             "(0x804F). High nibble release, low nibble "
+                             "press; each count costs one report period")
+    parser.add_argument("--refresh-rate", type=int, default=None,
+                        help="with --probe-touch: WRITE the report period "
+                             "(0x8056). Goodix: period is 5+N ms")
+    parser.add_argument("--vary-width", action="store_true",
+                        help="with --probe-home-press: alternate the card's "
+                             "WIDTH instead of the number of draws, so the "
+                             "flush-strip pitch can be read off the panel")
+    parser.add_argument("--single-draw-buffer", action="store_true",
+                        help="with --probe-home-press: bring the display up "
+                             "with ONE LVGL draw buffer instead of the pair")
     parser.add_argument("--invalidate", type=int, default=0,
                         help="with --probe-striping: invalidate the active "
                              "screen N times after each load")
