@@ -285,3 +285,64 @@ def restore_main(port, device_dir):
     print("   python -m mpremote connect {} cp "
           "products/panel/device/main.py :main.py".format(port))
     return False
+
+
+def board_listing(port, path):
+    """``{name: size}`` for a directory on the board, or None if unreadable.
+
+    Generalises _board_file_size to a whole directory, because the obligation
+    it exists for -- believe the board, not the copy's exit code -- applies to
+    /data far more than it ever did to main.py. main.py coming back wrong
+    means a black screen and someone re-runs the deploy. /data coming back
+    wrong means the user's devices, zones, schedules and settings are gone,
+    and the panel boots looking like a new one rather than like a loss.
+
+    Directory entries (mpremote prints them with a trailing slash) are
+    skipped: this compares files.
+    """
+    result = mpremote(port, "fs", "ls", path, capture=True)
+    if result is None or getattr(result, "returncode", 1) != 0:
+        return None
+    out = {}
+    for line in (result.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) != 2 or parts[1].endswith("/"):
+            continue
+        try:
+            out[parts[1]] = int(parts[0])
+        except ValueError:
+            continue
+    return out
+
+
+def compare_listings(expected, actual):
+    """Every way ``actual`` fails to match ``expected``, as readable lines.
+
+    Pure, and separate from anything that touches a board, so the host suite
+    can drive it with the failures that matter -- a file that did not arrive,
+    a file that arrived truncated -- instead of only ever seeing the happy
+    path on a bench. A copy that reports success and leaves zero bytes is not
+    hypothetical here: it happened twice to main.py (task 46).
+    """
+    problems = []
+    for name in sorted(expected):
+        if name not in actual:
+            problems.append("{} is missing".format(name))
+        elif actual[name] != expected[name]:
+            problems.append("{} is {} bytes, expected {}".format(
+                name, actual[name], expected[name]))
+    for name in sorted(set(actual) - set(expected)):
+        problems.append("{} appeared and was not in the source".format(name))
+    return problems
+
+
+def local_listing(directory):
+    """``{name: size}`` for the files directly inside ``directory``."""
+    out = {}
+    if not os.path.isdir(directory):
+        return out
+    for name in sorted(os.listdir(directory)):
+        path = os.path.join(directory, name)
+        if os.path.isfile(path):
+            out[name] = os.path.getsize(path)
+    return out
