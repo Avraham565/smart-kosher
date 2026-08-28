@@ -9,6 +9,8 @@ screen.
 """
 
 import argparse
+import datetime
+import json
 import os
 import subprocess
 import sys
@@ -27,6 +29,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
 DEVICE = os.path.join(HERE, os.pardir, "device")
 HWTEST = os.path.join(HERE, os.pardir, "hwtest")
+
+# The touch controller's four tuned registers live in the GT911's own flash.
+# They survive power-off, a reflash and --erase-all, and nothing in this repo
+# can see them -- so before this file existed the only trace of them was prose
+# in a task list. --probe-touch rewrites the "observed" half on every run, and
+# tests/test_touch_registers_match_the_baseline.py compares it against the
+# "expected" half, which is written by hand and changed only on purpose.
+TOUCH_RECORD = os.path.join(HERE, "touch_registers.json")
+TOUCH_CONFIG_MARK = "TOUCH_CONFIG"
 
 # Uploaded before the run. city_picker is the component under test; the others
 # are what it imports and may have changed alongside it. The suite itself comes
@@ -68,7 +79,7 @@ PAYLOAD = ("city_picker.py", "settime.py", "zmanim_page.py",
 RUN_TIMEOUT_S = 600
 
 
-def _run_probe(port, call, hint):
+def _run_probe(port, call, hint, record=None):
     """Drive one probe instead of the suite. A person reads the panel.
 
     Scored by PROBE_DONE rather than by suite_verdict, and the difference is
@@ -83,10 +94,76 @@ def _run_probe(port, call, hint):
     """
     lines = run_suite_on_device(
         port, "import hwtest_ui; hwtest_ui." + call, RUN_TIMEOUT_S, hint=hint)
+    # Before the verdict, and deliberately: a probe that died halfway still
+    # read the controller before it died, and that reading is worth keeping.
+    if record is not None:
+        record(lines)
     if any(line.strip().startswith("PROBE_DONE") for line in lines):
         return 0
     print("!! the probe never reached the end -- nothing was measured")
     return 1
+
+
+def _record_touch_config(lines, port):
+    """Turn the probe's TOUCH_CONFIG line into a file the repo can diff.
+
+    The task this closes (59) is not "document the four numbers" -- they were
+    already written down in prose, and prose is not a baseline. It is to leave
+    a RECORD, so that the next reading can be compared against this one by
+    something other than a person remembering.
+
+    The LAST marker wins. A run that writes new values prints the line twice:
+    once for what the controller held on arrival, once for what it holds after
+    the save. Only the second describes the board that is now on the bench.
+
+    Only the "observed" half is touched. "expected" is the tuned baseline and
+    is changed by hand, on purpose -- if this function rewrote both, the test
+    that compares them would agree with itself forever, which is the false
+    green CLAUDE.md spends a section on.
+    """
+    marks = [ln for ln in lines if ln.strip().startswith(TOUCH_CONFIG_MARK + " ")]
+    if not marks:
+        print("!! the probe printed no {} line, so nothing was recorded. The "
+              "board may not have reached the controller at all."
+              .format(TOUCH_CONFIG_MARK))
+        return
+    observed = {}
+    for pair in marks[-1].split()[1:]:
+        key, _, value = pair.partition("=")
+        try:
+            observed[key] = int(value)
+        except ValueError:
+            print("!! could not read {!r} out of the probe line; nothing "
+                  "recorded".format(pair))
+            return
+    observed["read_at"] = datetime.datetime.now(
+        datetime.timezone.utc).replace(microsecond=0).isoformat()
+    observed["port"] = port
+
+    try:
+        with open(TOUCH_RECORD, encoding="utf-8") as handle:
+            record = json.load(handle)
+    except (OSError, ValueError):
+        record = {}
+        print("!! {} was missing or unreadable, so it is being created with "
+              "an observed half only. Fill in \"expected\" by hand before "
+              "trusting the test.".format(os.path.basename(TOUCH_RECORD)))
+    record["observed"] = observed
+    with open(TOUCH_RECORD, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(record, handle, indent=2)
+        handle.write("\n")
+    print("== recorded to {} ==".format(os.path.relpath(TOUCH_RECORD, ROOT)))
+    expected = record.get("expected")
+    if expected:
+        drift = [k for k in ("press_level", "leave_level", "shake_count",
+                             "refresh_rate")
+                 if observed.get(k) != expected.get(k)]
+        if drift:
+            print("!! the controller does not match the baseline: {}".format(
+                ", ".join("{} is {} not {}".format(
+                    k, observed.get(k), expected.get(k)) for k in drift)))
+        else:
+            print("   matches the baseline on all four registers")
 
 
 def _run_suite(port, args=None):
@@ -139,7 +216,8 @@ def _run_suite(port, args=None):
                 args.press_level, args.leave_level,
                 args.shake_count, args.refresh_rate),
             "The probe died; if it was mid-save the controller config may be "
-            "half written -- re-run to read it back before changing anything.")
+            "half written -- re-run to read it back before changing anything.",
+            record=lambda lines: _record_touch_config(lines, port))
     if args is not None and args.probe_display_buffers:
         return _run_probe(
             port, "probe_display_buffers()",

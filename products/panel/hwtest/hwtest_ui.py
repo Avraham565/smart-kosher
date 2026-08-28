@@ -1811,6 +1811,28 @@ def probe_display_buffers():
 
 
 
+TOUCH_CONFIG_MARK = "TOUCH_CONFIG"
+
+
+def _print_touch_config(press_level, leave_level, shake_count, refresh_rate):
+    """The one machine-readable line this probe prints. Four keys, decimal.
+
+    Everything else probe_touch prints is written for a person standing at the
+    bench. This line is for run_hwtest_ui.py, which parses it into
+    host/touch_registers.json. The four numbers live in the controller's own
+    flash -- they survive power-off, a reflash and --erase-all, and nothing in
+    this repo can see them -- so a run that reads them and leaves no file
+    behind is a measurement nobody can compare against tomorrow.
+
+    Decimal on purpose. shake_count prints as 0x01 in the human block above and
+    as 1 here; one of the two had to win, and a parser that must know which of
+    its fields are hex is a parser that will eventually guess wrong.
+    """
+    print("{} press_level={} leave_level={} shake_count={} refresh_rate={}"
+          .format(TOUCH_CONFIG_MARK, press_level, leave_level,
+                  shake_count, refresh_rate))
+
+
 def probe_touch(press_level=None, leave_level=None,
                 shake_count=None, refresh_rate=None):
     """Report the touch controller's configuration. Writes only when told to.
@@ -1907,6 +1929,12 @@ def probe_touch(press_level=None, leave_level=None,
         "filter", filt, filt >> 4, filt & 0x0F))
     print("   {:<20} {}    -> report period {}ms".format(
         "refresh_rate", refresh, period))
+    # Emitted here, before any write is considered, so every way out of this
+    # function has recorded what the controller actually held: the read-only
+    # path, and the refusal path where the config object was already mutated
+    # in memory but never saved.
+    _print_touch_config(config.touch_press_level, config.touch_leave_level,
+                        shake, refresh)
     print("")
     print("   so the controller alone costs about {}ms to confirm one edge"
           .format((shake >> 4) * period))
@@ -1965,6 +1993,10 @@ def probe_touch(press_level=None, leave_level=None,
     print("   this is not a knob to turn in a loop.")
     config.save()
     print("   saved.")
+    # A second line, because the first recorded what was there BEFORE this
+    # write. The host keeps the last one, so the record is what the controller
+    # carries now rather than what it carried when the probe started.
+    _print_touch_config(now[0], now[1], now[2], now[3])
 
     print("")
     print("PROBE_DONE touch")

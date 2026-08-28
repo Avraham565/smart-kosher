@@ -1,0 +1,38 @@
+{
+  "_note": [
+    "The GT911 touch controller's tuned registers. They live in the",
+    "controller's own flash: they survive power-off, a reflash and",
+    "--erase-all, and nothing else in this repo can see them. Before this",
+    "file existed the only trace of them was prose in a task list.",
+    "",
+    "'expected' is the baseline task 53 tuned the panel to (86ms -> 28ms of",
+    "touch latency) and is edited BY HAND, on purpose. 'previous' is the way",
+    "back if a change makes the panel worse. 'observed' is rewritten by",
+    "products/panel/host/run_hwtest_ui.py --probe-touch on every run, from",
+    "what the controller actually reported.",
+    "",
+    "tests/test_touch_registers_match_the_baseline.py compares the two. If it",
+    "goes red, the bench board is not in the tuned state -- decide which side",
+    "is wrong before editing either."
+  ],
+  "expected": {
+    "press_level": 65,
+    "leave_level": 45,
+    "shake_count": 1,
+    "refresh_rate": 3
+  },
+  "previous": {
+    "press_level": 80,
+    "leave_level": 50,
+    "shake_count": 2,
+    "refresh_rate": 5
+  },
+  "observed": {
+    "press_level": 65,
+    "leave_level": 45,
+    "shake_count": 1,
+    "refresh_rate": 3,
+    "read_at": "2026-08-28T10:37:49+00:00",
+    "port": "COM8"
+  }
+}
