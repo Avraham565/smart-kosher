@@ -137,8 +137,11 @@ class Harness:
 async def test_link(h, r):
     print("\n[1] link and coordinator")
     result = await h.gw.ping()
-    r.check(result["status"] in EXECUTION_SUCCESS_STATUSES, "ping answers",
-            result["status"])
+    # Returned, and not only counted: [4] is evidence only if something was
+    # answering at all. A radio that is not there fails every command, and the
+    # one [4] wants to see fail is among them.
+    alive = r.check(result["status"] in EXECUTION_SUCCESS_STATUSES,
+                    "ping answers", result["status"])
     caps = h.gw._capabilities
     r.check("delivery_ack" in caps, "delivery_ack advertised", str(caps))
     health = h.gw.info.get("health") or {}
@@ -148,6 +151,7 @@ async def test_link(h, r):
         r.check(health.get(key, 0) == 0, "no " + key, str(health.get(key)))
     r.note("coordinator uptime {}s, frames in {}".format(
         health.get("uptime_s"), health.get("rx_frames")))
+    return alive
 
 
 async def test_delivery(h, r, dut):
@@ -196,8 +200,46 @@ async def test_unreachable(h, r):
             "and is reported as a failure", result["status"])
 
 
+async def test_remove_device_answers_with_a_verdict(h, r, link_alive):
+    print("\n[4] a leave nobody answers")
+    # Task 21. The old firmware fired ezb_zdo_nwk_mgmt_leave_req, discarded the
+    # return value, registered no callback and acked "ok" unconditionally -- so
+    # this exact call came back a success, with nothing removed and nobody
+    # asked. That is the one command that never had the ack ladder.
+    #
+    # Addressed at a short nothing answers on, exactly like [3]. The check
+    # therefore costs no pairing: there is no real device taken off the mesh
+    # and none to put back, which is what makes it safe to run every time
+    # rather than once, on a bench whose devices are someone's actual lamps.
+    # A coordinator that is not answering times out too, so "not a success"
+    # is true of a dead link and says nothing about the firmware. Without this
+    # guard the check passes hardest exactly when it measured nothing -- and it
+    # did: the first run of it reported PASS twice while [1] showed the H2 had
+    # stopped answering entirely. Measured, then guarded.
+    if not r.check(link_alive,
+                   "the coordinator answers, so a verdict here is the leave's "
+                   "and not the link's"):
+        return
+    # Timed, because "not a success" alone does not say who decided that. The
+    # firmware gives a leave 8000ms before it expires the transaction; the
+    # adapter has an ack timeout of its own and it is far shorter. A verdict
+    # back in ~1.3s is the adapter giving up, and one near 8s is the firmware
+    # answering -- and only the second is the ladder this task added.
+    start = h.ms()
+    result = await h.gw._command(
+        "remove_device",
+        {"ieee_addr": "00:00:00:00:00:de:ad:00", "short_addr": "0xdead"})
+    elapsed = h.ms() - start
+    r.note("leave verdict {} after {}ms (firmware expiry is 8000ms)".format(
+        result["status"], elapsed))
+    r.check(result["status"] not in EXECUTION_SUCCESS_STATUSES,
+            "an unanswered leave is NOT reported as success", result["status"])
+    r.check(result["status"] in ("error", "timeout"),
+            "and comes back carrying a real verdict", result["status"])
+
+
 async def test_manual_signal(h, r, actuator, dut):
-    print("\n[4] manual intervention (the override rule depends on this)")
+    print("\n[5] manual intervention (the override rule depends on this)")
     dut_before = await h.read_true_state(dut)
     act_before = await h.read_true_state(actuator)
     if dut_before is None or act_before is None:
@@ -240,7 +282,7 @@ async def test_manual_signal(h, r, actuator, dut):
 
 
 async def test_observed_state_integrity(h, r, dut):
-    print("\n[5] we never mistake our own command for the device's word")
+    print("\n[6] we never mistake our own command for the device's word")
     # Keyed by (ieee, endpoint) since the per-gang split: popping by ieee
     # alone silently did nothing here, which left this phase reading state
     # phase 4 had put there -- and turned the assertion below into one that
@@ -301,13 +343,14 @@ async def _run(actuator, dut):
     dut_initial = None
     act_initial = None
     try:
-        await test_link(h, r)
+        link_alive = await test_link(h, r)
         dut_initial = await test_delivery(h, r, dut)
         await test_unreachable(h, r)
+        await test_remove_device_answers_with_a_verdict(h, r, link_alive)
         act_initial = await test_manual_signal(h, r, actuator, dut)
         await test_observed_state_integrity(h, r, dut)
     finally:
-        print("\n[6] restoring")
+        print("\n[7] restoring")
         await restore(h, r, actuator, act_initial, "actuator")
         # The DUT follows the actuator, so put the actuator back first and only
         # then correct the DUT if it still differs.
