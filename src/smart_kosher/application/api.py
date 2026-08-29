@@ -293,7 +293,13 @@ class Api:
             if entity.get("ieee_address") == ieee:
                 return          # another endpoint still uses this device
         try:
-            await self._zigbee.forget_device(ieee)
+            # Started, not awaited. The coordinator gives a leave 8000ms before
+            # it answers, and a user who pressed delete must not watch a screen
+            # for that -- the entity is already gone and the verdict only
+            # decides whether the registry record is earned. Waiting here also
+            # forced the wait to be short enough for a person, which is how the
+            # verdict came to be thrown away.
+            self._zigbee.start_forget_device(ieee)
         except Exception as exc:
             # The entity is already gone; a radio that cannot be reached must
             # not turn a successful delete into an error the user sees.

@@ -97,7 +97,7 @@ class GatewayTestCase(unittest.TestCase):
         self.repo.upsert("endpoints", {
             "id": "ep1", "name": "boiler", "ieee_address": IEEE})
         self.gateway = ZigbeeGateway(
-            self.uart, self.repo, ack_timeout_ms=80, log=lambda *a: None)
+            self.uart, self.repo, ack_timeout_ms=80, leave_timeout_ms=80, log=lambda *a: None)
         self.uart.deliver = self.gateway.process_line
 
     def join_device(self, **kwargs):
@@ -925,12 +925,12 @@ class RegistryTests(GatewayTestCase):
     def test_registry_survives_reboot_via_file(self):
         path = os.path.join(tempfile.mkdtemp(), "zigbee_devices.json")
         gw1 = ZigbeeGateway(self.uart, self.repo, registry_path=path,
-                            ack_timeout_ms=80, log=lambda *a: None)
+                            ack_timeout_ms=80, leave_timeout_ms=80, log=lambda *a: None)
         self.uart.deliver = gw1.process_line
         self.uart.feed(joined_event())
 
         gw2 = ZigbeeGateway(FakeUart(), self.repo, registry_path=path,
-                            ack_timeout_ms=80, log=lambda *a: None)
+                            ack_timeout_ms=80, leave_timeout_ms=80, log=lambda *a: None)
         self.assertIn(IEEE, gw2.devices())
         self.assertEqual(SHORT, gw2.devices()[IEEE]["short_addr"])
 
@@ -960,7 +960,7 @@ class RegistryDurabilityTests(GatewayTestCase):
 
     def _gateway(self, uart=None):
         return ZigbeeGateway(uart or FakeUart(), self.repo,
-                             registry_path=self.path, ack_timeout_ms=80,
+                             registry_path=self.path, ack_timeout_ms=80, leave_timeout_ms=80,
                              log=lambda *a: None)
 
     def _pair_one(self):
@@ -1552,11 +1552,23 @@ class ForgetVerdictTests(GatewayTestCase):
         self.join_device()
         api = self._api()
 
-        run(api.dispatch("endpoints.delete", {"id": "ep1"}))   # no answer
+        async def scenario():
+            await api.dispatch("endpoints.delete", {"id": "ep1"})
+            self.assertEqual([], self.repo.get_all("endpoints"))
+            self.assertIn(IEEE, self.gateway._registry,
+                          "the record was dropped without a verdict")
+            # The leave has to be in flight, not skipped. Since the delete
+            # stopped awaiting the radio (task 60) an untouched registry is
+            # also what a delete that sent nothing at all would leave behind,
+            # so the earlier version of this check would pass over no radio
+            # traffic whatsoever.
+            task = self.gateway._leaving.get(IEEE)
+            self.assertIsNotNone(task, "no leave was started")
+            await task
+            self.assertIn(IEEE, self.gateway._registry)
+            self.assertTrue(self.gateway.devices()[IEEE]["leave_failed"])
 
-        self.assertEqual([], api.dispatch and self.repo.get_all("endpoints"))
-        self.assertIn(IEEE, self.gateway._registry,
-                      "the record was dropped without a verdict")
+        run(scenario())
 
     def test_a_device_that_comes_back_clears_the_mark(self):
         self.join_device()
@@ -1566,6 +1578,78 @@ class ForgetVerdictTests(GatewayTestCase):
         self.join_device()          # it announced itself again
 
         self.assertNotIn("leave_failed", self.gateway.devices()[IEEE])
+
+
+class LeaveVerdictIsNotAwaitedTests(GatewayTestCase):
+    """Task 60. The verdict is still read; nobody is made to wait for it."""
+
+    def test_the_caller_is_not_made_to_wait_for_the_radio(self):
+        self.join_device()
+
+        async def scenario():
+            task = self.gateway.start_forget_device(IEEE)
+            # Returned already, with nothing answered and nothing decided.
+            self.assertIn(IEEE, self.gateway._registry)
+            self.assertNotIn("leave_failed", self.gateway.devices()[IEEE])
+            await task
+            # And the verdict still landed, off the caller's path. Both halves
+            # matter: returning early is easy, and so is reading the verdict.
+            # Only doing both is the fix.
+            self.assertTrue(self.gateway.devices()[IEEE]["leave_failed"])
+
+        run(scenario())
+
+    def test_a_leave_that_succeeds_still_forgets_it(self):
+        self.join_device()
+        self.uart.autoresponder = lambda m: [ack_for(m)]
+
+        # Wrapped, because start_forget_device schedules a task and so needs
+        # a running loop -- it is called from api.dispatch, which has one.
+        async def scenario():
+            await self.gateway.start_forget_device(IEEE)
+
+        run(scenario())
+
+        self.assertNotIn(IEEE, self.gateway._registry)
+
+    def test_a_leave_the_coordinator_calls_failed_is_not_a_removal(self):
+        # The firmware answers a leave "delivered" or "failed", and its expiry
+        # sweep sends "failed" for a device that never responded. That verdict
+        # was read as a success: remove_device is not in _DEVICE_OPS, so the
+        # ack ladder never ran on it and every ack fell through to
+        # sent_to_zigbee, which counts as delivered. The record was dropped for
+        # a device still on the mesh -- the exact outcome task 21 exists to
+        # prevent, one layer further in.
+        #
+        # It never fired because the adapter gave up at 1500ms and never saw
+        # the verdict at all. Waiting long enough to receive it (task 60) is
+        # what makes this reachable, so the two have to land together.
+        self.join_device()
+        self.uart.autoresponder = lambda m: [ack_for(m, status="failed")]
+
+        async def scenario():
+            await self.gateway.start_forget_device(IEEE)
+
+        run(scenario())
+
+        self.assertIn(IEEE, self.gateway._registry,
+                      "a failed leave dropped the record anyway")
+        self.assertTrue(self.gateway.devices()[IEEE]["leave_failed"])
+
+    def test_one_leave_per_device_at_a_time(self):
+        # Two deletes racing one device put a duplicate leave on the wire, and
+        # each answers under a request_id the other is waiting on.
+        self.join_device()
+
+        async def scenario():
+            first = self.gateway.start_forget_device(IEEE)
+            self.assertIs(first, self.gateway.start_forget_device(IEEE))
+            await first
+
+        run(scenario())
+
+        self.assertEqual(
+            1, len([op for op in self.written_ops() if op == "remove_device"]))
 
 
 class DiscardAndIdentifyTests(GatewayTestCase):

@@ -64,6 +64,20 @@ from .uart_codec import encode as uart_encode
 # Acks measured well under 500ms on hardware; 1500ms already means the
 # command is lost (coordinator restarts take longer than any retry helps).
 _DEFAULT_ACK_TIMEOUT_MS = 1500
+# A leave is the one command whose firmware expiry is longer than that. The
+# coordinator gives it REPORTING_TIMEOUT_MS -- 8000ms in zb.c -- before it
+# expires the transaction and answers "failed", because remove_device borrowed
+# the constant meant for the bind/configure chain "nobody blocks on". Awaited on
+# the ordinary 1500ms budget it therefore always ends in a timeout that pops the
+# pending slot, and the real verdict lands with nowhere to go and is discarded:
+# the exact fault 63b1465 removed, returning through two numbers that disagree
+# rather than through any code. Measured on the board at 1511ms against an
+# 8000ms expiry.
+#
+# Longer than the firmware's own expiry, and affordable only because nothing
+# blocks on it -- start_forget_device runs the wait off the caller's path.
+# tests/test_leave_timeout_outlasts_the_firmware.py pins the two together.
+_LEAVE_VERDICT_TIMEOUT_MS = 9000
 _BREAKER_THRESHOLD = 2          # consecutive timeouts before failing fast
 _WATCHDOG_UP_MS = 30000         # heartbeat ping interval while link is up
 _WATCHDOG_DOWN_MS = 2000        # re-probe interval while link is down
@@ -112,7 +126,18 @@ _COMMAND_WINDOW = 4
 
 # Ops that address a Zigbee device, and so can be proven delivered. Everything
 # else (ping, permit_join) is the coordinator answering about itself.
-_DEVICE_OPS = ("on_off", "read_attr", "read_report_cfg")
+# The ops aimed at a *device*, and so subject to the ack ladder. ping and
+# permit_join are the coordinator answering about itself, with nothing to
+# confirm; an op left out of this tuple has every ack read as sent_to_zigbee,
+# which EXECUTION_SUCCESS_STATUSES counts as delivered.
+#
+# remove_device belongs here and was missing. The firmware answers a leave
+# "delivered" or "failed" -- the expiry sweep sends "failed" for a device that
+# never responded -- and both were being read as a removal, so the record was
+# dropped for a device still on the mesh. Nothing ever saw it, because the
+# adapter gave up at 1500ms against an 8000ms expiry and the verdict never
+# arrived; the wait that now receives it (task 60) is what makes this reachable.
+_DEVICE_OPS = ("on_off", "read_attr", "read_report_cfg", "remove_device")
 
 # The cluster whose reporting the control path depends on.
 _CLUSTER_ON_OFF = 0x0006
@@ -120,11 +145,18 @@ _CLUSTER_ON_OFF = 0x0006
 
 class ZigbeeGateway(DeviceGateway):
     def __init__(self, uart, repository, registry_path=None,
-                 ack_timeout_ms=_DEFAULT_ACK_TIMEOUT_MS, log=print):
+                 ack_timeout_ms=_DEFAULT_ACK_TIMEOUT_MS,
+                 leave_timeout_ms=_LEAVE_VERDICT_TIMEOUT_MS, log=print):
         self._uart = uart
         self._repo = repository
         self._registry_path = registry_path
         self._ack_timeout_ms = ack_timeout_ms
+        self._leave_timeout_ms = leave_timeout_ms
+        # ieee -> the task waiting for its leave verdict. A live reference, not
+        # bookkeeping: this MicroPython asyncio collects a task nobody holds
+        # before it runs, which is why bridge.py pins its dispatches the same
+        # way. Doubles as the guard against two deletes racing one device.
+        self._leaving = {}
         self._log = log
         self._seq = 0
         # rid -> [asyncio.Event, reply-or-None]
@@ -1372,6 +1404,44 @@ class ZigbeeGateway(DeviceGateway):
                     "error": back.get("error", "could not restore")}
         return {"identified": True, "restored": True}
 
+    def start_forget_device(self, ieee):
+        """Send the leave and return at once. The verdict lands later.
+
+        Nobody waits for a radio. The entity the user deleted is already gone
+        from the panel either way -- see _release_radio_device -- and the only
+        thing the verdict decides is whether the registry record is earned. So
+        the wait belongs off the caller's path, which is what lets it be longer
+        than the coordinator's own 8000ms expiry instead of shorter than it.
+
+        That is the whole point: the timeout stops being a trade-off. A leave
+        answered on the eighth second is still read, and the user never sees a
+        screen waiting for it. enable_reporting, which shares that expiry, is
+        handled the same way and for the same reason.
+
+        Returns the task, so a caller that does want to wait -- a test, a bench
+        run -- still can. One leave per device at a time: a second delete of a
+        device already leaving would put a duplicate on the wire and race its
+        own verdict.
+        """
+        if ieee in self._leaving:
+            return self._leaving[ieee]
+
+        async def runner():
+            try:
+                await self.forget_device(ieee)
+            except Exception as exc:
+                # A background task is the one place an exception has no
+                # caller to reach, so it is logged rather than lost.
+                self._log("forget_device({}) failed: {}".format(ieee, exc))
+            finally:
+                self._leaving.pop(ieee, None)
+
+        task = asyncio.create_task(runner())
+        # Assigned before the loop can run runner(): there is no await between
+        # the two lines, so the task cannot be collected in the gap.
+        self._leaving[ieee] = task
+        return task
+
     async def forget_device(self, ieee):
         """Ask the device to leave, and forget it only if it did.
 
@@ -1400,7 +1470,8 @@ class ZigbeeGateway(DeviceGateway):
             return {"removed": False}
         result = await self._command(
             "remove_device",
-            {"ieee_addr": ieee, "short_addr": entry.get("short_addr")})
+            {"ieee_addr": ieee, "short_addr": entry.get("short_addr")},
+            timeout_ms=self._leave_timeout_ms)
         if result["status"] not in EXECUTION_SUCCESS_STATUSES:
             entry["leave_failed"] = result.get("error") or result["status"]
             self._save_registry()
