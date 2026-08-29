@@ -228,14 +228,21 @@ async def test_remove_device_answers_with_a_verdict(h, r, link_alive):
     start = h.ms()
     result = await h.gw._command(
         "remove_device",
-        {"ieee_addr": "00:00:00:00:00:de:ad:00", "short_addr": "0xdead"})
+        {"ieee_addr": "00:00:00:00:00:de:ad:00", "short_addr": "0xdead"},
+        timeout_ms=h.gw._leave_timeout_ms)
     elapsed = h.ms() - start
     r.note("leave verdict {} after {}ms (firmware expiry is 8000ms)".format(
         result["status"], elapsed))
     r.check(result["status"] not in EXECUTION_SUCCESS_STATUSES,
             "an unanswered leave is NOT reported as success", result["status"])
-    r.check(result["status"] in ("error", "timeout"),
-            "and comes back carrying a real verdict", result["status"])
+    # "error" is the firmware's own "failed", which its expiry sweep sends for
+    # a leave nobody answered. "timeout" would mean the adapter stopped
+    # listening first -- which is what it did before the budget outgrew the
+    # coordinator's 8000ms expiry, and the reason the verdict used to be
+    # discarded. The distinction is the whole of task 60.
+    r.check(result["status"] == "error",
+            "and the verdict is the firmware's, not the adapter giving up",
+            result["status"])
 
 
 async def test_manual_signal(h, r, actuator, dut):
